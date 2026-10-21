@@ -24,7 +24,7 @@ const ROADS: Record<string, [number, string, string, number]> = {
   path: [1.5, '#bdb092', '#8e8266', 0],
 };
 const LANDCOVER: Record<string, [string, number]> = {
-  grass: ['#85b862', 0.6], wood: ['#5c9a48', 0.65], forest: ['#5c9a48', 0.65], farmland: ['#a8b866', 0.4], sand: ['#e0d3a0', 0.7],
+  grass: ['#85b862', 0.25], wood: ['#5c9a48', 0.28], forest: ['#5c9a48', 0.28], farmland: ['#a8b866', 0.18], sand: ['#e0d3a0', 0.7],
   wetland: ['#6fa38a', 0.6], rock: ['#9a948a', 0.6], ice: ['#f2f6fa', 0.8], glacier: ['#f2f6fa', 0.8],
 };
 const LANDUSE: Record<string, [string, number]> = {
@@ -154,9 +154,7 @@ export class MapData {
     };
     fillClass(L.landcover, LANDCOVER);
     fillClass(L.landuse, LANDUSE);
-    g.fillStyle = '#6fae5c'; g.globalAlpha = 0.6;
-    for (const f of L.park ?? []) if (f.type === 3) poly(f);
-    g.globalAlpha = 1;
+    // note: the `park` layer is protected areas (national parks, nature reserves), not urban parks; painting it hid real terrain
     g.fillStyle = '#4f86b8';
     for (const f of L.water ?? []) if (f.type === 3) poly(f);
     g.fillStyle = '#6b6966';

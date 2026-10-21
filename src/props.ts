@@ -153,7 +153,7 @@ export class Props {
       }
     };
     for (const f of vt.layers.landcover ?? []) if (f.type === 3 && (f.props.class === 'wood' || f.props.class === 'forest')) scatter(f, 7, 0.75);
-    for (const f of vt.layers.park ?? []) if (f.type === 3) scatter(f, 14, 0.5);
+    for (const f of vt.layers.landcover ?? []) if (f.type === 3 && f.props.class === 'grass' && ['park', 'recreation_ground', 'garden'].includes(f.props.subclass)) scatter(f, 14, 0.5);
     for (const f of vt.layers.landuse ?? []) if (f.type === 3 && (f.props.class === 'cemetery' || f.props.class === 'recreation_ground')) scatter(f, 16, 0.45);
 
     // roads: lampposts every ~32 m on alternating sides, trees every ~26 m on residential streets

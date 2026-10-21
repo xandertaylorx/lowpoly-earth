@@ -1,3 +1,5 @@
 node_modules
 dist
 .claude
+public/_capture.js
+media/
