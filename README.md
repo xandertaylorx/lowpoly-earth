@@ -78,7 +78,7 @@ The car is a glTF model. Drop `.glb` files in `public/models/` and they replace 
 | `public/models/airliner.glb` | airliner | 38 m long |
 | `public/models/jet.glb` | stealth jet | 19 m long |
 
-Models should face **+Z** (the glTF convention), any size or origin. Free sources: [Poly Pizza](https://poly.pizza), [Kenney](https://kenney.nl/assets), [Quaternius](https://quaternius.com) (CC0). Draco-compressed files work.
+List every model file you add in `public/models/index.json` (e.g. `["car.glb", "airliner.glb", "jet.glb"]`); only listed files are loaded. Models should face **+Z** (the glTF convention), any size or origin. Free sources: [Poly Pizza](https://poly.pizza), [Kenney](https://kenney.nl/assets), [Quaternius](https://quaternius.com) (CC0). Draco-compressed files work.
 
 ## How it works
 

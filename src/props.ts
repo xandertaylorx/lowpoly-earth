@@ -15,7 +15,7 @@ const STREET_TREE_ROADS = new Set(['tertiary', 'minor']);
 
 function geom(parts: { g: THREE.BufferGeometry; color: string; y?: number }[]) {
   const list = parts.map(({ g, color, y = 0 }) => {
-    const n = g.toNonIndexed(); n.translate(0, y, 0);
+    const n = g.index ? g.toNonIndexed() : g.clone(); n.translate(0, y, 0);
     const col = new THREE.Color(color), a = new Float32Array(n.getAttribute('position').count * 3);
     for (let i = 0; i < a.length; i += 3) { a[i] = col.r; a[i + 1] = col.g; a[i + 2] = col.b; }
     n.setAttribute('color', new THREE.BufferAttribute(a, 3));

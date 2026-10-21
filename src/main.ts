@@ -43,9 +43,13 @@ const shinyModel = (m: THREE.Group | null) => {
   return m;
 };
 // optional glTF vehicles (see src/models.ts); built-in low-poly ones are used if the files are absent
-loadModel(import.meta.env.BASE_URL + 'models/car.glb', 4.5, 0, false).then((m) => shinyModel(m) && car.useModel(m!));
-loadModel(import.meta.env.BASE_URL + 'models/airliner.glb', 38, -AIRLINER.gear).then((m) => shinyModel(m) && airliner.useModel(m!));
-loadModel(import.meta.env.BASE_URL + 'models/jet.glb', 19, -JET.gear).then((m) => shinyModel(m) && jet.useModel(m!));
+fetch(import.meta.env.BASE_URL + 'models/index.json').then((r) => (r.ok ? r.json() : [])).catch(() => []).then((files: string[]) => {
+  const load = (file: string, len: number, baseY: number, faces: boolean, apply: (m: THREE.Group) => void) =>
+    files.includes(file) && loadModel(import.meta.env.BASE_URL + 'models/' + file, len, baseY, faces).then((m) => m && shinyModel(m) && apply(m));
+  load('car.glb', 4.5, 0, false, (m) => car.useModel(m));
+  load('airliner.glb', 38, -AIRLINER.gear, true, (m) => airliner.useModel(m));
+  load('jet.glb', 19, -JET.gear, true, (m) => jet.useModel(m));
+});
 const minimap = new Minimap($('minimap') as HTMLCanvasElement);
 const q = new URLSearchParams(location.search);
 if (q.has('hours')) sky.timeOffsetH = parseFloat(q.get('hours')!);
@@ -336,13 +340,16 @@ function updateShadows(agl: number, speed: number) {
   const near = Math.min(1, Math.max(0, (1300 - agl) / 600)) * (speed < 260 ? 1 : 0);
   const on = shadowSize > 0 ? sunUp * near : 0;
   sh.intensity = on * (0.4 + 0.6 * (1 - sky.cover)); // overcast days get soft, faint shadows
-  sh.autoUpdate = on > 0.02;
-  if (!sh.autoUpdate) return;
-  const R = Math.min(900, Math.max(110, agl * 0.9 + 110)), D = 1600;
+  // IMPORTANT: never stop updating the shadow map. If it is never rendered it is never allocated, and every
+  // shadow-receiving material then samples an invalid texture (GL_INVALID_OPERATION, objects silently not drawn).
+  // When shadows are "off" we shrink the frustum to a 2 m box instead, so almost nothing is rendered into it.
+  sh.autoUpdate = true;
+  const R = on > 0.02 ? Math.min(900, Math.max(110, agl * 0.9 + 110)) : 2, D = 1600;
   sdir.copy(sky.sunDir).normalize();
+  if (sdir.y < 0.05) sdir.y = 0.05, sdir.normalize(); // sun below the horizon: keep the light above the ground
   sup.set(Math.abs(sdir.y) > 0.99 ? 1 : 0, Math.abs(sdir.y) > 0.99 ? 0 : 1, 0);
   sright.crossVectors(sup, sdir).normalize(); sup.crossVectors(sdir, sright).normalize();
-  const texel = (2 * R) / shadowSize, c = camera.position;
+  const texel = (2 * R) / (shadowSize || 1024), c = camera.position;
   const tx = Math.round(c.dot(sright) / texel) * texel, ty = Math.round(c.dot(sup) / texel) * texel, tz = c.dot(sdir);
   sctr.set(0, 0, 0).addScaledVector(sright, tx).addScaledVector(sup, ty).addScaledVector(sdir, tz);
   light.target.position.copy(sctr);
