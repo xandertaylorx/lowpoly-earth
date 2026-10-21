@@ -136,6 +136,7 @@ export class Sky {
           vec3 col = mix(shadeCol, litCol, vShade);
           col = mix(col, fogCol, smoothstep(fogNear, fogFar, vDist));
           gl_FragColor = vec4(col, a);
+          #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }`,
     }));
@@ -218,7 +219,7 @@ export class Sky {
     this.sun.intensity = 2.8 * dayF * (1 - 0.7 * over);
     this.hemi.color.copy(this.topC).lerp(new THREE.Color('#ffffff'), 0.5);
     this.hemi.groundColor.set('#8a8d92');
-    this.hemi.intensity = (lerp(0.28, 1.05, dayF) * (1 - 0.15 * over)) + this.flash * 2;
+    this.hemi.intensity = (lerp(0.28, 1.5, dayF) * (1 - 0.05 * over)) + this.flash * 2;
     this.sun.position.copy(cam.position).addScaledVector(this.sunDir, 1000);
     this.sun.target.position.copy(cam.position);
 

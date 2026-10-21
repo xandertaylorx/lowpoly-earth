@@ -24,7 +24,7 @@ const ROADS: Record<string, [number, string, string, number]> = {
   path: [1.5, '#bdb092', '#8e8266', 0],
 };
 const LANDCOVER: Record<string, [string, number]> = {
-  grass: ['#78ab57', 0.6], wood: ['#3f7d3e', 0.7], forest: ['#3f7d3e', 0.7], farmland: ['#a8b866', 0.4], sand: ['#e0d3a0', 0.7],
+  grass: ['#85b862', 0.6], wood: ['#5c9a48', 0.65], forest: ['#5c9a48', 0.65], farmland: ['#a8b866', 0.4], sand: ['#e0d3a0', 0.7],
   wetland: ['#6fa38a', 0.6], rock: ['#9a948a', 0.6], ice: ['#f2f6fa', 0.8], glacier: ['#f2f6fa', 0.8],
 };
 const LANDUSE: Record<string, [string, number]> = {
@@ -105,7 +105,7 @@ export class MapData {
     if (dist > (RADIUS[zi] ?? 0)) return null;
     const d = t.z - zi, vx = t.x >> d, vy = t.y >> d, key = `${zi}/${vx}/${vy}`;
     const hit = this.tex.get(key);
-    if (hit) { hit.last = performance.now(); return { mat: hit.mat, zi }; }
+    if (hit) { hit.last = performance.now(); return { mat: hit.mat, tex: hit.tex, zi }; }
     this.want(zi, vx, vy, dist / (40075016 / 2 ** zi));
     const e = this.vt.get(key);
     const s = sat(zi, vx, vy);
@@ -121,7 +121,7 @@ export class MapData {
       for (const [k, v] of same) if (k !== key && v.last < ot && now - v.last > 2500) { oldest = k; ot = v.last; }
       if (oldest) { const v = this.tex.get(oldest)!; v.tex.dispose(); v.mat.dispose(); this.tex.delete(oldest); }
     }
-    return { mat, zi };
+    return { mat, tex, zi };
   }
 
   private draw(z: number, _x: number, y: number, vt: VT, sat: SatSrc) {

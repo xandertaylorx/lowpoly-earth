@@ -7,11 +7,14 @@ import { Plane, AIRLINER, JET, type PlaneInput } from './plane';
 import { Car } from './car';
 import { Cities } from './cities';
 import { MapData } from './mapdata';
+import { Props } from './props';
 
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = $('view') as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.6;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(70, 1, 0.5, 600000);
 const resize = () => { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); };
@@ -24,6 +27,7 @@ const sky = new Sky(scene);
 const maps = new MapData();
 terrain.mapProvider = maps;
 const cities = new Cities(scene, terrain, maps);
+const props = new Props(scene, terrain, maps);
 const airliner = new Plane(scene, AIRLINER);
 const jet = new Plane(scene, JET);
 const car = new Car(scene);
@@ -47,7 +51,7 @@ const camPos = new THREE.Vector3();
 const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), windV = new THREE.Vector3();
 let crashTimer = 0;
 
-(window as any).__rw = { maps, cities, terrain, world, camera, player, airliner, jet, car, sky, keys, get veh() { return veh; }, get mode() { return mode; }, teleport: (a: number, b: number) => teleport(a, b) };
+(window as any).__rw = { props, maps, cities, terrain, world, camera, player, airliner, jet, car, sky, keys, get veh() { return veh; }, get mode() { return mode; }, teleport: (a: number, b: number) => teleport(a, b) };
 
 const groundAt = (x: number, z: number) => terrain.heightAt(x, z);
 
@@ -95,6 +99,7 @@ function teleport(lat: number, lon: number) {
   sky.cloudOff.set(0, 0);
   terrain.reposition();
   cities.reposition();
+  props.reposition();
   if (mode === 'fly') {
     veh.pos.set(0, Math.max(veh.pos.y, 1500), 0);
     player.pos.copy(veh.pos);
@@ -257,6 +262,53 @@ function placeCamera(dt: number) {
   camera.lookAt(tmpV2.set(0, cm.up * 0.25, -cm.back * 1.5).applyQuaternion(veh.q).add(veh.pos));
 }
 
+// ---- country / ocean label (OSM Nominatim reverse geocoding, cached per half-degree cell) -----------
+let country = '…', lastCell = '', lastReq = 0;
+const countryCache = new Map<string, string>();
+function setCountry(name: string) {
+  if (name === country) return;
+  if (country !== '…') notify(name.startsWith('Over') ? name : `Entering ${name}`, 3000);
+  country = name;
+}
+async function updateCountry(lat: number, lon: number) {
+  const cell = `${Math.round(lat * 2)},${Math.round(lon * 2)}`;
+  if (cell === lastCell) return;
+  const hit = countryCache.get(cell);
+  if (hit !== undefined) { lastCell = cell; setCountry(hit); return; }
+  if (performance.now() - lastReq < 1500) return; // be polite to Nominatim (max ~1 req/s)
+  lastReq = performance.now(); lastCell = cell;
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&zoom=3&accept-language=en&lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`);
+    const j = await r.json();
+    const name = j.address?.country ?? 'Over international waters';
+    countryCache.set(cell, name);
+    if (lastCell === cell) setCountry(name);
+  } catch { lastCell = ''; }
+}
+
+// ---- adaptive quality: keeps the frame rate up on weaker machines ------------------------------------
+let tier = 2, fpsEma = 60, lowFor = 0, highFor = 0;
+const dpr = Math.min(devicePixelRatio, 2);
+function setTier(t: number) {
+  tier = t;
+  renderer.setPixelRatio([1, Math.min(dpr, 1.25), dpr][t]);
+  resize();
+  const s = [0.3, 0.6, 1][t];
+  cities.scale = s; props.scale = s;
+  terrain.zCap = [13, 14, 15][t];
+  terrain.anisotropy = [2, 4, 4][t];
+}
+setTier(2);
+const forced = q.get('quality');
+if (forced) setTier(Math.max(0, Math.min(2, +forced)));
+function adapt(dt: number, realDt: number) {
+  if (forced || realDt > 0.5) return; // ignore hidden-tab / paused frames
+  fpsEma += (1 / Math.max(realDt, 0.001) - fpsEma) * 0.05;
+  if (fpsEma < 38) { lowFor += dt; highFor = 0; } else if (fpsEma > 56) { highFor += dt; lowFor = 0; } else { lowFor = highFor = 0; }
+  if (lowFor > 3 && tier > 0) { setTier(tier - 1); lowFor = 0; fpsEma = 50; }
+  if (highFor > 25 && tier < 2) { setTier(tier + 1); highFor = 0; }
+}
+
 // ---- main loop -----------------------------------------------------------------------------------
 let last = performance.now(), tAcc = 0, hudAcc = 0;
 const hud = $('hud'), help = $('help');
@@ -264,7 +316,8 @@ const fmt = (v: number, d = 0) => v.toFixed(d);
 
 function frame(now: number) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  const realDt = (now - last) / 1000, dt = Math.min(0.1, realDt); last = now;
+  adapt(dt, realDt);
   if (mode === 'walk') walk(dt); else if (mode === 'fly') fly(dt); else drive(dt);
   const speedNow = mode === 'walk' ? (keys.has('ShiftLeft') ? 28 : 6) : Math.abs((veh as Plane | Car).speed);
 
@@ -276,6 +329,7 @@ function frame(now: number) {
     sky.rebase(remap);
     terrain.reposition(remap);
     cities.reposition();
+    props.reposition();
   }
   placeCamera(dt);
 
@@ -288,6 +342,7 @@ function frame(now: number) {
     terrain.update(camera.position.x, camera.position.y, camera.position.z, f.x, f.z, Math.min(sky.fogFar * 1.05, 150000), speedNow);
     const cg0 = groundAt(camera.position.x, camera.position.z);
     cities.update(camera.position.x, camera.position.z, speedNow > 330 ? 99999 : camera.position.y - Math.max(0, cg0?.h ?? 0));
+    props.update(camera.position.x, camera.position.z, cities.radius);
   }
   const cg = groundAt(camera.position.x, camera.position.z);
   sky.update(dt, camera, geo.lat, geo.lon, camera.position.y - Math.max(0, cg?.h ?? 0));
@@ -301,6 +356,7 @@ function frame(now: number) {
     const fwd = tmpV.set(0, 0, -1).applyQuaternion(mode === 'walk' ? camera.quaternion : veh.q);
     const heading = ((Math.atan2(fwd.x, -fwd.z) * 180) / Math.PI + 360) % 360;
     minimap.draw(pg.lat, pg.lon, heading);
+    updateCountry(pg.lat, pg.lon);
     const g = groundAt(player.pos.x, player.pos.z);
     const w = sky.w, lt = sky.localTime;
     let vehicle: string;
@@ -313,6 +369,7 @@ function frame(now: number) {
       vehicle = `CAR  ${fmt(Math.abs(c.speed) * 3.6)} km/h${c.speed < -0.5 ? ' (reverse)' : ''}\nW/S throttle · A/D steer · Space handbrake`;
     } else vehicle = player.needsGround ? 'Loading terrain…' : `ON FOOT${player.swimming ? ' (swimming)' : ''}   F: summon ${VEHICLES[selected].label.toLowerCase()}`;
     hud.textContent =
+      `${country}\n` +
       `${Math.abs(pg.lat).toFixed(4)}°${pg.lat >= 0 ? 'N' : 'S'}  ${Math.abs(pg.lon).toFixed(4)}°${pg.lon >= 0 ? 'E' : 'W'}\n` +
       `Alt ${fmt(player.pos.y)} m ASL` + (g ? `   AGL ${fmt(player.pos.y - Math.max(0, g.h))} m` : '') + `   HDG ${fmt(heading)}°\n` +
       vehicle + '\n' +
@@ -320,7 +377,8 @@ function frame(now: number) {
       `vis ${fmt(w.vis / 1000, 1)} km  fog ${fmt(sky.fogFar / 1000, 1)} km  [${sky.status}]\n` +
       `Local ${lt.toISOString().slice(11, 16)}  sun ${fmt(sky.sunAlt)}°\n` +
       `tiles ${terrain.stats.shown} shown · ${terrain.stats.ready} cached · ${terrain.stats.inflight} loading\n` +
-      `${cities.stats.tiles} city tiles · ${cities.stats.buildings} buildings`;
+      `${cities.stats.tiles} city tiles · ${cities.stats.buildings} buildings · ${props.stats.trees} trees · ${props.stats.lamps} lamps\n` +
+      `quality ${['low', 'medium', 'high'][tier]} · ${fmt(fpsEma)} fps`;
     help.textContent = mode === 'walk'
       ? 'WASD walk · Shift sprint · Space jump\nMouse look (click to capture, Esc frees)\n1/2/3 pick vehicle · F summon & board\nM map zoom · double-click map to teleport'
       : mode === 'drive' ? 'W/S throttle · A/D steer · Space handbrake\nC cockpit/chase · F get out (when slow)\nM map zoom'

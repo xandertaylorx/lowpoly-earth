@@ -36,6 +36,7 @@ interface CityTile {
 export class Cities {
   group = new THREE.Group();
   radius = 0;
+  scale = 1; // quality multiplier on radius
   stats = { tiles: 0, buildings: 0 };
   private tiles = new Map<string, CityTile>();
   private wallMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, map: facadeTexture(), side: THREE.DoubleSide });
@@ -69,7 +70,7 @@ export class Cities {
 
   /** Call ~4x/s with the camera position and height above ground. */
   update(px: number, pz: number, agl: number) {
-    this.radius = agl > 3000 ? 0 : agl > 1200 ? 2500 : agl > 400 ? 3500 : 4500;
+    this.radius = (agl > 3000 ? 0 : agl > 1200 ? 2500 : agl > 400 ? 3500 : 4500) * this.scale;
     const { lat, lon } = world.toGeo(px, pz);
     const n = 2 ** Z;
     const dLat = this.radius / M_PER_DEG, dLon = this.radius / world.mLon;
@@ -164,7 +165,7 @@ export class Cities {
         const u1 = Math.max(1, Math.round(len / WIN_W)), v0 = bottom / FLOOR_H, v1 = top / FLOOR_H;
         wp.push(ax, bottom, az, bx, bottom, bz, bx, top, bz, ax, bottom, az, bx, top, bz, ax, top, az);
         wu.push(0, v0, u1, v0, u1, v1, 0, v0, u1, v1, 0, v1);
-        for (let q = 0; q < 6; q++) wc.push(wall.r, wall.g, wall.b);
+        for (const f of [0.6, 0.6, 1, 0.6, 1, 1]) wc.push(wall.r * f, wall.g * f, wall.b * f); // darker at the base: cheap fake ambient occlusion
       }
       v2.length = 0;
       for (let k = 0; k < m; k++) v2.push(new THREE.Vector2(lx(ring[k * 2]), lz(ring[k * 2 + 1])));

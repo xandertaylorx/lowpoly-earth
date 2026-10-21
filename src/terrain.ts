@@ -95,6 +95,43 @@ function makeWaterMaterial() {
   });
 }
 
+/** tileable fractal noise (mean ~0.5) used to give the ground crisp close-up detail */
+function makeDetailTexture() {
+  const S = 128, data = new Uint8Array(S * S * 4);
+  const lattices = [8, 16, 32, 64].map((n, o) => { const a = new Float32Array(n * n); let sd = 11 + o * 7; for (let i = 0; i < a.length; i++) { sd = (sd * 16807) % 2147483647; a[i] = sd / 2147483647; } return { n, a }; });
+  const wts = [0.45, 0.28, 0.18, 0.09];
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    let v = 0;
+    lattices.forEach(({ n, a }, o) => {
+      const fx = (x / S) * n, fy = (y / S) * n, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+      const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty), g = (i: number, j: number) => a[(j % n) * n + (i % n)];
+      v += wts[o] * ((g(x0, y0) * (1 - sx) + g(x0 + 1, y0) * sx) * (1 - sy) + (g(x0, y0 + 1) * (1 - sx) + g(x0 + 1, y0 + 1) * sx) * sy);
+    });
+    const c = Math.max(0, Math.min(255, 128 + (v - 0.5) * 380));
+    const k = (y * S + x) * 4; data[k] = data[k + 1] = data[k + 2] = c; data[k + 3] = 255;
+  }
+  const t = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter; t.magFilter = THREE.LinearFilter;
+  t.anisotropy = 8; t.colorSpace = THREE.NoColorSpace; t.needsUpdate = true;
+  return t;
+}
+const detailTex = makeDetailTexture();
+
+function patchDetail(m: THREE.MeshLambertMaterial, rep: { value: number }) {
+  m.customProgramCacheKey = () => 'terrain-detail-v1';
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.detailMap = { value: detailTex }; sh.uniforms.detailRepeat = rep;
+    sh.fragmentShader = sh.fragmentShader
+      .replace('void main() {', 'uniform sampler2D detailMap; uniform float detailRepeat;\nvoid main() {')
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        #ifdef USE_MAP
+          float dfade = 1.0 - smoothstep(40.0, 500.0, length(vViewPosition));
+          vec3 dtex = texture2D(detailMap, vMapUv * detailRepeat).rgb;
+          diffuseColor.rgb *= mix(vec3(1.0), dtex * 2.0, dfade * 0.35);
+        #endif`);
+  };
+}
+
 class Tile {
   key: string;
   state: 'idle' | 'loading' | 'ready' = 'idle';
@@ -102,7 +139,7 @@ class Tile {
   minH = 0; maxH = 0;
   mesh?: THREE.Mesh; water?: THREE.Mesh;
   builtVer = -1;
-  lastShown = 0; wasSplit = false; textured = false; imgKey = ''; mapMat?: THREE.Material; uvZ = -1;
+  lastShown = 0; wasSplit = false; textured = false; imgKey = ''; mapMat?: THREE.Texture; uvZ = -1; normalTex?: THREE.DataTexture; mat?: THREE.MeshLambertMaterial; detailRep = { value: 1 };
   want = -1; score = 0; retryAt = 0; readyAt = 0;
   lonW: number; lonE: number; latN: number; latS: number; cLat: number; cLon: number;
   constructor(public z: number, public x: number, public y: number) {
@@ -157,6 +194,7 @@ export class Terrain {
   private imgQueue: string[] = [];
   private imgInflight = 0;
   anisotropy = 4;
+  zCap = MAX_Z;   // quality tier cap
   maxZ = MAX_Z;   // dynamic: lowered at high speed so detail we can't use isn't fetched
   mapProvider?: MapData;
   private p = { x: 0, y: 0, z: 0, fx: 0, fz: -1 };
@@ -216,7 +254,7 @@ export class Terrain {
     this.stamp++;
     this.queue.length = 0;
     this.imgQueue.length = 0;
-    this.maxZ = speed > 700 ? 12 : speed > 350 ? 13 : speed > 150 ? 14 : MAX_Z;
+    this.maxZ = Math.min(this.zCap, speed > 700 ? 12 : speed > 350 ? 13 : speed > 150 ? 14 : MAX_Z);
 
     // 1) prefetch: walk the same quadtree from points ahead of us (requests only, nothing displayed)
     if (speed > 40) {
@@ -390,7 +428,7 @@ export class Terrain {
   }
 
   /** UVs of tile t into a (coarser or equal) texture tile at zoom zi */
-  private setUV(t: Tile, geo: THREE.BufferGeometry, pos: ArrayLike<number>, zi: number) {
+  private setUV(t: Tile, geo: THREE.BufferGeometry, pos: ArrayLike<number>, zi: number, attr = 'uv') {
     const d = t.z - zi, div = 2 ** d, nz = 2 ** t.z, W = geo.userData.W as number;
     const ox = t.x - (t.x >> d) * div, oy = t.y - (t.y >> d) * div;
     const cnt = pos.length / 3;
@@ -401,8 +439,8 @@ export class Terrain {
       const v = ((1 - Math.asinh(Math.tan((lat * Math.PI) / 180)) / Math.PI) / 2) * nz - t.y;
       uv[k * 2] = (ox + u) / div; uv[k * 2 + 1] = (oy + v) / div;
     }
-    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    t.uvZ = zi;
+    geo.setAttribute(attr, new THREE.BufferAttribute(uv, 2));
+    if (attr === 'uv') t.uvZ = zi;
   }
 
   /** satellite bitmap (and sub-rect) covering the zoom-zi tile (vx,vy), if loaded */
@@ -412,17 +450,30 @@ export class Terrain {
     return e?.bmp ? { bmp: e.bmp, sx: (vx & 1) * 128, sy: (vy & 1) * 128, sw: 128, sh: 128 } : undefined;
   };
 
+  /** put texture `tex` on the tile; tiles with a normal map get their own lit-detail material */
+  private surface(t: Tile, tex: THREE.Texture | null, shared?: THREE.Material) {
+    if (!t.mesh) return;
+    if (!t.normalTex) { t.mesh.material = shared ?? this.terrainMat; return; }
+    if (!t.mat) {
+      t.mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, normalMap: t.normalTex, normalMapType: THREE.ObjectSpaceNormalMap });
+      patchDetail(t.mat, t.detailRep);
+    }
+    if (t.mat.map !== tex) { t.mat.map = tex; t.mat.needsUpdate = true; }
+    t.detailRep.value = (t.widthM * 2 ** Math.max(0, t.z - t.uvZ)) / 7;
+    t.mesh.material = t.mat;
+  }
+
   private tryMap(t: Tile): boolean {
     if (!this.mapProvider || t.z < 12) return false;
     const m = this.mapProvider.provide(t, this.dist(t).d, this.satFor);
     if (m) {
-      if (t.mapMat !== m.mat && t.mesh) {
-        t.mesh.material = m.mat;
+      if (t.mapMat !== m.tex && t.mesh) {
         const geo = t.mesh.geometry;
         this.setUV(t, geo, geo.getAttribute('position').array, m.zi);
+        this.surface(t, m.tex, m.mat);
         const col = geo.getAttribute('color') as THREE.BufferAttribute;
         (col.array as Float32Array).fill(1); col.needsUpdate = true;
-        t.mapMat = m.mat; t.textured = true;
+        t.mapMat = m.tex; t.textured = true;
       }
       return true;
     }
@@ -430,11 +481,11 @@ export class Terrain {
     return false;
   }
 
-  private applyTexture(t: Tile, e: { mat?: THREE.Material }) {
+  private applyTexture(t: Tile, e: { mat?: THREE.Material; tex?: THREE.Texture }) {
     if (!t.mesh || !e.mat) return;
     const sz = this.imageKeyFor(t).zi;
     if (t.uvZ !== sz) { const geo = t.mesh.geometry; this.setUV(t, geo, geo.getAttribute('position').array, sz); }
-    t.mesh.material = e.mat;
+    this.surface(t, (e as { tex?: THREE.Texture }).tex ?? null, e.mat);
     const col = t.mesh.geometry.getAttribute('color') as THREE.BufferAttribute;
     (col.array as Float32Array).fill(1);
     col.needsUpdate = true;
@@ -474,6 +525,7 @@ export class Terrain {
         if (h < mn) mn = h; if (h > mx) mx = h;
       }
       t.heights = g; t.minH = mn; t.maxH = mx;
+      if (t.z >= 10 && !t.normalTex) t.normalTex = this.makeNormalTex(t, H);
       t.state = 'ready'; t.readyAt = performance.now();
       this.build(t);
     } catch {
@@ -483,6 +535,24 @@ export class Terrain {
       this.inflight--;
       this.pump();
     }
+  }
+
+  /** object-space normal map from the full 256px height tile: this is what gives mountains their shape */
+  private makeNormalTex(t: Tile, H: Float32Array) {
+    const S = t.z >= 12 ? 256 : 128, step = 256 / S, data = new Uint8Array(S * S * 4);
+    const dx = t.widthM / 255, dz = ((t.latN - t.latS) * M_PER_DEG) / 255, K = 2, EXAG = 1.5;
+    for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) {
+      const sx = Math.min(255, Math.floor(i * step)), sy = Math.min(255, Math.floor(j * step));
+      const x0 = Math.max(0, sx - K), x1 = Math.min(255, sx + K), y0 = Math.max(0, sy - K), y1 = Math.min(255, sy + K);
+      const gx = ((H[sy * 256 + x1] - H[sy * 256 + x0]) / ((x1 - x0) * dx)) * EXAG;
+      const gz = ((H[y1 * 256 + sx] - H[y0 * 256 + sx]) / ((y1 - y0) * dz)) * EXAG;
+      const l = Math.hypot(gx, 1, gz), k = (j * S + i) * 4;
+      data[k] = ((-gx / l) * 0.5 + 0.5) * 255; data[k + 1] = ((1 / l) * 0.5 + 0.5) * 255; data[k + 2] = ((-gz / l) * 0.5 + 0.5) * 255; data[k + 3] = 255;
+    }
+    const tex = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
+    tex.colorSpace = THREE.NoColorSpace; tex.channel = 1; tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping; tex.anisotropy = 4; tex.needsUpdate = true;
+    return tex;
   }
 
   // ---- meshing ---------------------------------------------------------------------------
@@ -544,10 +614,12 @@ export class Terrain {
     geo.setAttribute('color', new THREE.BufferAttribute(col.subarray(0, o), 3));
     geo.userData.W = W;
     this.setUV(t, geo, pos, this.imageKeyFor(t).zi);
+    if (t.normalTex) this.setUV(t, geo, pos, t.z, 'uv1');
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
     t.mesh = new THREE.Mesh(geo, this.terrainMat);
     t.textured = false; t.mapMat = undefined;
+    this.surface(t, null, this.terrainMat);
     const ie = this.images.get(this.imageKeyFor(t).key);
     if (ie?.state === 'ready') this.applyTexture(t, ie);
 
@@ -589,6 +661,7 @@ export class Terrain {
     for (const [k, t] of this.tiles) {
       if (t.state === 'ready' && !this.shown.has(k) && this.lastEvict - t.lastShown > 30000) {
         this.disposeMesh(t);
+        t.normalTex?.dispose(); t.mat?.dispose();
         this.tiles.delete(k);
       }
     }
@@ -597,7 +670,7 @@ export class Terrain {
         if (e.state === 'ready' && this.lastEvict - e.last > 90000) {
           e.tex?.dispose(); e.mat?.dispose(); e.bmp?.close();
           this.images.delete(k);
-          for (const t of this.tiles.values()) if (t.imgKey === k) { t.textured = false; if (t.mesh) t.mesh.material = this.terrainMat; }
+          for (const t of this.tiles.values()) if (t.imgKey === k) { t.textured = false; if (t.mat) { t.mat.map = null; t.mat.needsUpdate = true; } if (t.mesh) t.mesh.material = t.mat ?? this.terrainMat; }
         }
       }
     }
