@@ -18,9 +18,9 @@ interface TileLike { z: number; x: number; y: number }
 
 // road class -> [width m, fill, casing, rank]
 const ROADS: Record<string, [number, string, string, number]> = {
-  motorway: [17, '#74716e', '#3f3d3b', 9], trunk: [14, '#787572', '#3f3d3b', 8], primary: [12, '#7d7a77', '#46433f', 7],
-  secondary: [10, '#868380', '#4b4845', 6], tertiary: [8, '#8d8a87', '#514e4b', 5], minor: [6, '#94918d', '#57544f', 4],
-  service: [3.6, '#9a9792', '#5e5b56', 3], pedestrian: [4, '#b2aca0', '#7a746a', 2], track: [2.6, '#a39679', '#7a6f58', 1],
+  motorway: [17, '#4a4d52', '#2c2e31', 9], trunk: [14, '#4c4f54', '#2c2e31', 8], primary: [12, '#4f5257', '#2f3134', 7],
+  secondary: [10, '#54575c', '#313336', 6], tertiary: [8, '#5a5d62', '#35373a', 5], minor: [6, '#606368', '#393b3e', 4],
+  service: [3.6, '#6a6d71', '#404245', 3], pedestrian: [4, '#b2aca0', '#8f897f', 2], track: [2.6, '#a39679', '#7a6f58', 1],
   path: [1.5, '#bdb092', '#8e8266', 0],
 };
 const LANDCOVER: Record<string, [string, number]> = {
@@ -28,7 +28,7 @@ const LANDCOVER: Record<string, [string, number]> = {
   wetland: ['#6fa38a', 0.6], rock: ['#9a948a', 0.6], ice: ['#f2f6fa', 0.8], glacier: ['#f2f6fa', 0.8],
 };
 const LANDUSE: Record<string, [string, number]> = {
-  residential: ['#b9b3a7', 0.28], suburb: ['#b9b3a7', 0.28], commercial: ['#c9b8b0', 0.4], retail: ['#cbbcae', 0.4], industrial: ['#a5a29e', 0.5],
+  residential: ['#aaa69e', 0.5], suburb: ['#aaa69e', 0.4], commercial: ['#a8a39c', 0.65], retail: ['#a8a39c', 0.65], industrial: ['#97958f', 0.65],
   railway: ['#8d8984', 0.5], cemetery: ['#78ab57', 0.7], school: ['#c9c3b3', 0.35], university: ['#c9c3b3', 0.35], hospital: ['#d2c8c4', 0.4],
   pitch: ['#6fb04f', 0.85], playground: ['#6fb04f', 0.6], stadium: ['#a9a59f', 0.6], garages: ['#9b9893', 0.5], quarry: ['#b3a58b', 0.7],
 };
@@ -161,7 +161,7 @@ export class MapData {
     for (const f of L.water ?? []) if (f.type === 3) poly(f);
     g.fillStyle = '#6b6966';
     for (const f of L.aeroway ?? []) if (f.type === 3) poly(f);
-    if (z >= 14) { g.fillStyle = '#8f8b86'; g.globalAlpha = 0.6; for (const f of L.building ?? []) if (f.type === 3) poly(f); g.globalAlpha = 1; }
+    if (z >= 14) { g.fillStyle = '#85827d'; g.globalAlpha = 0.8; for (const f of L.building ?? []) if (f.type === 3) poly(f); g.globalAlpha = 1; }
 
     g.lineJoin = 'round'; g.lineCap = 'round';
     g.strokeStyle = '#4f86b8';
@@ -176,6 +176,15 @@ export class MapData {
     const roads = (L.transportation ?? []).filter((f) => f.type === 2 && f.props.brunnel !== 'tunnel' && (ROADS[f.props.class] || f.props.class === 'rail' || f.props.class === 'transit'));
     const rank = (f: Feat) => ROADS[f.props.class]?.[3] ?? -1;
     roads.sort((a, b) => rank(a) - rank(b));
+    if (z >= 14) { // pavements: a light strip 2 m each side of the street
+      g.lineCap = 'butt';
+      for (const f of roads) {
+        const r = ROADS[f.props.class];
+        if (!r || r[3] < 3 || r[3] > 7) continue;
+        g.strokeStyle = '#bab6ae'; g.lineWidth = px(r[0] + 4.5, 2); line(f);
+      }
+      g.lineCap = 'round';
+    }
     for (const f of roads) { // casings first so junctions merge cleanly
       const r = ROADS[f.props.class]; if (!r) continue;
       g.strokeStyle = r[2]; g.lineWidth = px(r[0] + 1.8, 1.6); g.lineCap = r[3] <= 1 ? 'butt' : 'round'; line(f);

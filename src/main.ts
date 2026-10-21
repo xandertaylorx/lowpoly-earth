@@ -8,6 +8,8 @@ import { Car } from './car';
 import { Cities } from './cities';
 import { MapData } from './mapdata';
 import { Props } from './props';
+import { loadModel } from './models';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = $('view') as HTMLCanvasElement;
@@ -31,6 +33,12 @@ const props = new Props(scene, terrain, maps);
 const airliner = new Plane(scene, AIRLINER);
 const jet = new Plane(scene, JET);
 const car = new Car(scene);
+// soft studio-style reflections so glossy glTF paint/metal doesn't look flat (terrain/buildings are unaffected)
+{ const pm = new THREE.PMREMGenerator(renderer); scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; scene.environmentIntensity = 0.8; pm.dispose(); }
+// optional glTF vehicles (see src/models.ts); built-in low-poly ones are used if the files are absent
+loadModel('/models/car.glb', 4.5, 0, false).then((m) => m && car.useModel(m));
+loadModel('/models/airliner.glb', 38, -AIRLINER.gear).then((m) => m && airliner.useModel(m));
+loadModel('/models/jet.glb', 19, -JET.gear).then((m) => m && jet.useModel(m));
 const minimap = new Minimap($('minimap') as HTMLCanvasElement);
 const q = new URLSearchParams(location.search);
 if (q.has('hours')) sky.timeOffsetH = parseFloat(q.get('hours')!);
@@ -262,27 +270,28 @@ function placeCamera(dt: number) {
   camera.lookAt(tmpV2.set(0, cm.up * 0.25, -cm.back * 1.5).applyQuaternion(veh.q).add(veh.pos));
 }
 
-// ---- country / ocean label (OSM Nominatim reverse geocoding, cached per half-degree cell) -----------
-let country = '…', lastCell = '', lastReq = 0;
-const countryCache = new Map<string, string>();
-function setCountry(name: string) {
-  if (name === country) return;
-  if (country !== '…') notify(name.startsWith('Over') ? name : `Entering ${name}`, 3000);
-  country = name;
+// ---- "where am I" label: city + country (OSM Nominatim reverse geocoding, cached per 0.1 degree cell) ---
+let place = '…', country = '', lastCell = '', lastReq = 0;
+const placeCache = new Map<string, { label: string; country: string }>();
+function setPlace(label: string, c: string) {
+  if (c !== country && country !== '') notify(c.startsWith('International') ? c : `Entering ${c}`, 3000);
+  place = label; country = c;
 }
-async function updateCountry(lat: number, lon: number) {
-  const cell = `${Math.round(lat * 2)},${Math.round(lon * 2)}`;
+async function updatePlace(lat: number, lon: number) {
+  const cell = `${Math.round(lat * 10)},${Math.round(lon * 10)}`;
   if (cell === lastCell) return;
-  const hit = countryCache.get(cell);
-  if (hit !== undefined) { lastCell = cell; setCountry(hit); return; }
+  const hit = placeCache.get(cell);
+  if (hit) { lastCell = cell; setPlace(hit.label, hit.country); return; }
   if (performance.now() - lastReq < 1500) return; // be polite to Nominatim (max ~1 req/s)
   lastReq = performance.now(); lastCell = cell;
   try {
-    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&zoom=3&accept-language=en&lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`);
-    const j = await r.json();
-    const name = j.address?.country ?? 'Over international waters';
-    countryCache.set(cell, name);
-    if (lastCell === cell) setCountry(name);
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&zoom=10&accept-language=en&lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`);
+    const j = await r.json(), a = j.address;
+    const c = a?.country ?? 'International waters';
+    const city = a?.city ?? a?.town ?? a?.village ?? a?.municipality ?? a?.suburb ?? a?.county ?? '';
+    const v = { label: city && a ? `${city}, ${c}` : c, country: c };
+    placeCache.set(cell, v);
+    if (lastCell === cell) setPlace(v.label, v.country);
   } catch { lastCell = ''; }
 }
 
@@ -341,7 +350,7 @@ function frame(now: number) {
     maps.enabled = speedNow < (maps.enabled ? 220 : 150);          // hysteresis; ground paint is off at high speed
     terrain.update(camera.position.x, camera.position.y, camera.position.z, f.x, f.z, Math.min(sky.fogFar * 1.05, 150000), speedNow);
     const cg0 = groundAt(camera.position.x, camera.position.z);
-    cities.update(camera.position.x, camera.position.z, speedNow > 330 ? 99999 : camera.position.y - Math.max(0, cg0?.h ?? 0));
+    cities.update(camera.position.x, camera.position.z, speedNow > 450 ? 99999 : camera.position.y - Math.max(0, cg0?.h ?? 0));
     props.update(camera.position.x, camera.position.z, cities.radius);
   }
   const cg = groundAt(camera.position.x, camera.position.z);
@@ -356,7 +365,7 @@ function frame(now: number) {
     const fwd = tmpV.set(0, 0, -1).applyQuaternion(mode === 'walk' ? camera.quaternion : veh.q);
     const heading = ((Math.atan2(fwd.x, -fwd.z) * 180) / Math.PI + 360) % 360;
     minimap.draw(pg.lat, pg.lon, heading);
-    updateCountry(pg.lat, pg.lon);
+    updatePlace(pg.lat, pg.lon);
     const g = groundAt(player.pos.x, player.pos.z);
     const w = sky.w, lt = sky.localTime;
     let vehicle: string;
@@ -369,7 +378,7 @@ function frame(now: number) {
       vehicle = `CAR  ${fmt(Math.abs(c.speed) * 3.6)} km/h${c.speed < -0.5 ? ' (reverse)' : ''}\nW/S throttle · A/D steer · Space handbrake`;
     } else vehicle = player.needsGround ? 'Loading terrain…' : `ON FOOT${player.swimming ? ' (swimming)' : ''}   F: summon ${VEHICLES[selected].label.toLowerCase()}`;
     hud.textContent =
-      `${country}\n` +
+      `${place}\n` +
       `${Math.abs(pg.lat).toFixed(4)}°${pg.lat >= 0 ? 'N' : 'S'}  ${Math.abs(pg.lon).toFixed(4)}°${pg.lon >= 0 ? 'E' : 'W'}\n` +
       `Alt ${fmt(player.pos.y)} m ASL` + (g ? `   AGL ${fmt(player.pos.y - Math.max(0, g.h))} m` : '') + `   HDG ${fmt(heading)}°\n` +
       vehicle + '\n' +

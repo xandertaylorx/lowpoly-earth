@@ -22,6 +22,12 @@ export class Car {
 
   get pos() { return this.group.position; }
 
+  /** swap the built-in boxes for a loaded glTF model */
+  useModel(model: THREE.Object3D) {
+    for (const c of [...this.group.children]) this.group.remove(c);
+    this.group.add(model);
+  }
+
   constructor(scene: THREE.Scene) {
     const paint = new THREE.MeshLambertMaterial({ color: '#c2262e', flatShading: true });
     const glass = new THREE.MeshLambertMaterial({ color: '#27384d', flatShading: true });

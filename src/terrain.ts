@@ -525,7 +525,7 @@ export class Terrain {
         if (h < mn) mn = h; if (h > mx) mx = h;
       }
       t.heights = g; t.minH = mn; t.maxH = mx;
-      if (t.z >= 10 && !t.normalTex) t.normalTex = this.makeNormalTex(t, H);
+      if (t.z >= 8 && !t.normalTex) t.normalTex = this.makeNormalTex(t, H);
       t.state = 'ready'; t.readyAt = performance.now();
       this.build(t);
     } catch {
@@ -540,7 +540,8 @@ export class Terrain {
   /** object-space normal map from the full 256px height tile: this is what gives mountains their shape */
   private makeNormalTex(t: Tile, H: Float32Array) {
     const S = t.z >= 12 ? 256 : 128, step = 256 / S, data = new Uint8Array(S * S * 4);
-    const dx = t.widthM / 255, dz = ((t.latN - t.latS) * M_PER_DEG) / 255, K = 2, EXAG = 1.5;
+    const dx = t.widthM / 255, dz = ((t.latN - t.latS) * M_PER_DEG) / 255, K = 2;
+    const EXAG = t.z >= 14 ? 1.5 : t.z >= 12 ? 2.1 : t.z >= 10 ? 2.8 : 3.4; // far terrain gets stronger relief shading so mountains still read from the air
     for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) {
       const sx = Math.min(255, Math.floor(i * step)), sy = Math.min(255, Math.floor(j * step));
       const x0 = Math.max(0, sx - K), x1 = Math.min(255, sx + K), y0 = Math.max(0, sy - K), y1 = Math.min(255, sy + K);

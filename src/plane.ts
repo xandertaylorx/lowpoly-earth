@@ -104,6 +104,12 @@ export class Plane {
     this.flame.visible = false;
   }
 
+  /** swap the built-in model for a loaded glTF (the jet keeps its afterburner glow) */
+  useModel(model: THREE.Object3D) {
+    for (const c of [...this.group.children]) if (c !== this.flame) this.group.remove(c);
+    this.group.add(model);
+  }
+
   /** Put the plane on the ground at (x,z) facing yaw (radians, 0 = north). */
   park(x: number, z: number, ground: number, yaw: number) {
     this.group.position.set(x, ground + this.spec.gear, z);
