@@ -5,7 +5,7 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 // Optional glTF/GLB models. Drop files into public/models/ (airliner.glb, jet.glb, car.glb) and they replace the
 // built-in low-poly vehicles automatically. Models should face +Z (glTF convention) and use metres or any scale:
 // they are rescaled to `length` metres and sat on the ground.
-const draco = new DRACOLoader().setDecoderPath('/draco/');
+const draco = new DRACOLoader().setDecoderPath(import.meta.env.BASE_URL + 'draco/');
 const loader = new GLTFLoader().setDRACOLoader(draco);
 
 export async function loadModel(url: string, length: number, baseY = 0, facesPlusZ = true): Promise<THREE.Group | null> {

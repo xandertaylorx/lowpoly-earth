@@ -25,7 +25,7 @@ export class Minimap {
 
   private async load() {
     const img = new Image();
-    img.src = '/global-heightmap.png';
+    img.src = import.meta.env.BASE_URL + 'global-heightmap.png';
     await img.decode();
     const S = img.width;
     this.map.width = this.map.height = S;

@@ -2,6 +2,8 @@
 
 A low-poly, **real-scale** explorer of the actual planet, in your browser. Walk around Manchester, jump in an airliner and fly to New York, or teleport to the Grand Canyon, with real terrain, real satellite imagery, real buildings and the **real weather and time of day** at wherever you are.
 
+**▶ Play it: https://xandertaylorx.github.io/lowpoly-earth/**
+
 Built with [Three.js](https://threejs.org), Vite and TypeScript. No API keys, no backend: everything streams from free public data.
 
 ## Features

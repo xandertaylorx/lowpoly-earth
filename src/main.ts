@@ -43,9 +43,9 @@ const shinyModel = (m: THREE.Group | null) => {
   return m;
 };
 // optional glTF vehicles (see src/models.ts); built-in low-poly ones are used if the files are absent
-loadModel('/models/car.glb', 4.5, 0, false).then((m) => shinyModel(m) && car.useModel(m!));
-loadModel('/models/airliner.glb', 38, -AIRLINER.gear).then((m) => shinyModel(m) && airliner.useModel(m!));
-loadModel('/models/jet.glb', 19, -JET.gear).then((m) => shinyModel(m) && jet.useModel(m!));
+loadModel(import.meta.env.BASE_URL + 'models/car.glb', 4.5, 0, false).then((m) => shinyModel(m) && car.useModel(m!));
+loadModel(import.meta.env.BASE_URL + 'models/airliner.glb', 38, -AIRLINER.gear).then((m) => shinyModel(m) && airliner.useModel(m!));
+loadModel(import.meta.env.BASE_URL + 'models/jet.glb', 19, -JET.gear).then((m) => shinyModel(m) && jet.useModel(m!));
 const minimap = new Minimap($('minimap') as HTMLCanvasElement);
 const q = new URLSearchParams(location.search);
 if (q.has('hours')) sky.timeOffsetH = parseFloat(q.get('hours')!);
