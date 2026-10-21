@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Real World Explorer</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font: 12px/1.4 ui-monospace, Menlo, monospace; color: #e8eef5; }
+  canvas#view { display: block; width: 100%; height: 100%; }
+  .panel { position: fixed; background: rgba(8, 14, 24, .62); border: 1px solid rgba(255,255,255,.14); border-radius: 8px; padding: 8px 10px; backdrop-filter: blur(4px); }
+  #hud { left: 12px; top: 12px; min-width: 250px; white-space: pre; }
+  #tp { left: 12px; top: 158px; display: flex; gap: 6px; }
+  #tp input { width: 230px; background: rgba(0,0,0,.4); color: #fff; border: 1px solid rgba(255,255,255,.25); border-radius: 4px; padding: 4px 6px; font: inherit; }
+  #tp button { background: #2d6cdf; color: #fff; border: 0; border-radius: 4px; padding: 4px 10px; font: inherit; cursor: pointer; }
+  #mini { right: 12px; bottom: 12px; padding: 6px; }
+  #mini canvas { display: block; border-radius: 4px; }
+  #help { right: 12px; top: 12px; white-space: pre; opacity: .85; }
+  #msg { left: 50%; top: 18%; transform: translateX(-50%); font-size: 15px; display: none; }
+  #load { inset: 0; border-radius: 0; display: flex; align-items: center; justify-content: center; font-size: 16px; background: rgba(0,0,0,.75); z-index: 5; }
+  #load.hide { display: none; }
+  #cross { position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: rgba(255,255,255,.7); pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="cross"></div>
+<div id="hud" class="panel"></div>
+<div id="tp" class="panel"><input id="tpin" placeholder="place or lat, lon  (e.g. Grand Canyon)" spellcheck="false" /><button id="tpgo">Teleport</button></div>
+<div id="help" class="panel"></div>
+<div id="mini" class="panel"><canvas id="minimap" width="240" height="240"></canvas></div>
+<div id="msg" class="panel"></div>
+<div id="load" class="panel">Loading terrain…</div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
