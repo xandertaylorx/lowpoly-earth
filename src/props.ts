@@ -193,6 +193,7 @@ export class Props {
         im.setMatrixAt(i, m.compose(p, q, sc));
         if (tint) im.setColorAt(i, col.setHSL(0.27 + (hash(x, z, 7) - 0.5) * 0.08, 0.05 + hash(x, z, 8) * 0.12, 0.8 + hash(x, z, 6) * 0.2));
       });
+      im.castShadow = kind !== 'lampHead'; im.receiveShadow = kind === 'tree';
       im.position.set(c.x, 0, c.z); im.userData.kind = kind; im.frustumCulled = true;
       im.computeBoundingSphere();
       this.group.add(im); t.meshes.push(im);

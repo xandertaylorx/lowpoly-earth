@@ -11,6 +11,7 @@ Built with [Three.js](https://threejs.org), Vite and TypeScript. No API keys, no
 - **Satellite ground.** Sentinel-2 imagery draped on the terrain, with OpenStreetMap roads, parks, rivers, lakes and runways rasterised on top so streets look like streets.
 - **3D cities.** OSM buildings at their real heights with three facade styles (houses, offices, glass towers), pitched roofs on houses, rooftop units, trees, lampposts and pavements. Visible from the air too.
 - **Knows where you are.** The HUD shows the city and country under you and announces border crossings.
+- **Sun shadows.** Buildings, trees, lampposts and vehicles cast real shadows that follow the sun, softer on overcast days. Off at high altitude or speed, and in the lowest quality tier.
 - **Looks good, runs everywhere.** Normal-mapped terrain, detail textures, tone mapping, and automatic quality tiers that adapt to your frame rate (`?quality=0|1|2` to force one).
 - **Real weather** from [Open-Meteo](https://open-meteo.com), refreshed every 10 minutes: fog/visibility, cloud cover, rain, snow, thunderstorms and wind all drive the scene.
 - **Real time of day.** Sun position is computed from your real lat/lon and the real clock, with sunsets, twilight and stars.
@@ -104,7 +105,7 @@ The code is MIT. The data it loads is not, so please respect each source:
 ## Limitations and ideas
 
 - Buildings are extruded footprints with generated facades, not the real ones; only simple houses get pitched roofs.
-- Roads are painted on the ground rather than 3D; no cast shadows, people or traffic yet.
+- Roads are painted on the ground rather than 3D; no people or traffic yet. Mountains don't cast shadows (only buildings, trees and vehicles do).
 - No free aircraft glTF models are bundled (the plane and jet are low-poly); add your own as above.
 - Water exists only at sea level, so inland lakes appear as painted ground.
 - No time acceleration or autopilot, so Manchester to New York is about 6 real hours.

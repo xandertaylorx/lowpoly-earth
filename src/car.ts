@@ -25,6 +25,7 @@ export class Car {
   /** swap the built-in boxes for a loaded glTF model */
   useModel(model: THREE.Object3D) {
     for (const c of [...this.group.children]) this.group.remove(c);
+    model.traverse((o) => { o.castShadow = true; });
     this.group.add(model);
   }
 
@@ -50,6 +51,7 @@ export class Car {
       const w = add(new THREE.CylinderGeometry(0.38, 0.38, 0.28, 10), black, sx * WHEEL_X, 0.38, sz * WHEEL_Z);
       w.rotation.z = Math.PI / 2;
     }
+    this.group.traverse((o) => { o.castShadow = true; });
     scene.add(this.group);
   }
 

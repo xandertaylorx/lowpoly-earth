@@ -13,8 +13,10 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = $('view') as HTMLCanvasElement;
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: !location.search.includes('nolog') });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.6;
 const scene = new THREE.Scene();
@@ -33,12 +35,17 @@ const props = new Props(scene, terrain, maps);
 const airliner = new Plane(scene, AIRLINER);
 const jet = new Plane(scene, JET);
 const car = new Car(scene);
-// soft studio-style reflections so glossy glTF paint/metal doesn't look flat (terrain/buildings are unaffected)
-{ const pm = new THREE.PMREMGenerator(renderer); scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; scene.environmentIntensity = 0.8; pm.dispose(); }
+// soft studio-style reflections for glossy glTF paint/metal only (applied per model, NOT scene-wide: scene.environment
+// would also fill every terrain/building surface with ambient light and wash out the sun shadows)
+const envTex = (() => { const pm = new THREE.PMREMGenerator(renderer); const t = pm.fromScene(new RoomEnvironment(), 0.04).texture; pm.dispose(); return t; })();
+const shinyModel = (m: THREE.Group | null) => {
+  m?.traverse((o) => { const mat = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined; if (mat?.isMeshStandardMaterial) { mat.envMap = envTex; mat.envMapIntensity = 0.9; mat.needsUpdate = true; } });
+  return m;
+};
 // optional glTF vehicles (see src/models.ts); built-in low-poly ones are used if the files are absent
-loadModel('/models/car.glb', 4.5, 0, false).then((m) => m && car.useModel(m));
-loadModel('/models/airliner.glb', 38, -AIRLINER.gear).then((m) => m && airliner.useModel(m));
-loadModel('/models/jet.glb', 19, -JET.gear).then((m) => m && jet.useModel(m));
+loadModel('/models/car.glb', 4.5, 0, false).then((m) => shinyModel(m) && car.useModel(m!));
+loadModel('/models/airliner.glb', 38, -AIRLINER.gear).then((m) => shinyModel(m) && airliner.useModel(m!));
+loadModel('/models/jet.glb', 19, -JET.gear).then((m) => shinyModel(m) && jet.useModel(m!));
 const minimap = new Minimap($('minimap') as HTMLCanvasElement);
 const q = new URLSearchParams(location.search);
 if (q.has('hours')) sky.timeOffsetH = parseFloat(q.get('hours')!);
@@ -59,7 +66,7 @@ const camPos = new THREE.Vector3();
 const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), windV = new THREE.Vector3();
 let crashTimer = 0;
 
-(window as any).__rw = { props, maps, cities, terrain, world, camera, player, airliner, jet, car, sky, keys, get veh() { return veh; }, get mode() { return mode; }, teleport: (a: number, b: number) => teleport(a, b) };
+(window as any).__rw = { renderer, scene, props, maps, cities, terrain, world, camera, player, airliner, jet, car, sky, keys, get veh() { return veh; }, get mode() { return mode; }, teleport: (a: number, b: number) => teleport(a, b) };
 
 const groundAt = (x: number, z: number) => terrain.heightAt(x, z);
 
@@ -296,7 +303,7 @@ async function updatePlace(lat: number, lon: number) {
 }
 
 // ---- adaptive quality: keeps the frame rate up on weaker machines ------------------------------------
-let tier = 2, fpsEma = 60, lowFor = 0, highFor = 0;
+let tier = 2, fpsEma = 60, lowFor = 0, highFor = 0, shadowSize = 2048;
 const dpr = Math.min(devicePixelRatio, 2);
 function setTier(t: number) {
   tier = t;
@@ -306,6 +313,9 @@ function setTier(t: number) {
   cities.scale = s; props.scale = s;
   terrain.zCap = [13, 14, 15][t];
   terrain.anisotropy = [2, 4, 4][t];
+  shadowSize = [0, 1024, 2048][t];
+  const sh = sky.sun.shadow;
+  if (shadowSize && sh.mapSize.x !== shadowSize) { sh.map?.dispose(); sh.map = null; sh.mapSize.set(shadowSize, shadowSize); }
 }
 setTier(2);
 const forced = q.get('quality');
@@ -316,6 +326,30 @@ function adapt(dt: number, realDt: number) {
   if (fpsEma < 38) { lowFor += dt; highFor = 0; } else if (fpsEma > 56) { highFor += dt; lowFor = 0; } else { lowFor = highFor = 0; }
   if (lowFor > 3 && tier > 0) { setTier(tier - 1); lowFor = 0; fpsEma = 50; }
   if (highFor > 25 && tier < 2) { setTier(tier + 1); highFor = 0; }
+}
+
+// ---- sun shadows: one shadow map that follows the camera, snapped to texels so it doesn't shimmer ------
+const sdir = new THREE.Vector3(), sright = new THREE.Vector3(), sup = new THREE.Vector3(), sctr = new THREE.Vector3();
+function updateShadows(agl: number, speed: number) {
+  const light = sky.sun, sh = light.shadow, cam = sh.camera as THREE.OrthographicCamera;
+  const sunUp = Math.min(1, Math.max(0, (sky.sunAlt - 1) / 7));
+  const near = Math.min(1, Math.max(0, (1300 - agl) / 600)) * (speed < 260 ? 1 : 0);
+  const on = shadowSize > 0 ? sunUp * near : 0;
+  sh.intensity = on * (0.4 + 0.6 * (1 - sky.cover)); // overcast days get soft, faint shadows
+  sh.autoUpdate = on > 0.02;
+  if (!sh.autoUpdate) return;
+  const R = Math.min(900, Math.max(110, agl * 0.9 + 110)), D = 1600;
+  sdir.copy(sky.sunDir).normalize();
+  sup.set(Math.abs(sdir.y) > 0.99 ? 1 : 0, Math.abs(sdir.y) > 0.99 ? 0 : 1, 0);
+  sright.crossVectors(sup, sdir).normalize(); sup.crossVectors(sdir, sright).normalize();
+  const texel = (2 * R) / shadowSize, c = camera.position;
+  const tx = Math.round(c.dot(sright) / texel) * texel, ty = Math.round(c.dot(sup) / texel) * texel, tz = c.dot(sdir);
+  sctr.set(0, 0, 0).addScaledVector(sright, tx).addScaledVector(sup, ty).addScaledVector(sdir, tz);
+  light.target.position.copy(sctr);
+  light.position.copy(sctr).addScaledVector(sdir, D);
+  if (cam.right !== R) { cam.left = -R; cam.right = R; cam.top = R; cam.bottom = -R; cam.near = 10; cam.far = D + R + 400; cam.updateProjectionMatrix(); }
+  light.target.updateMatrixWorld();
+  if (q.has('shadowtest')) sky.hemi.intensity = 0.08; // debug: make shadows obvious
 }
 
 // ---- main loop -----------------------------------------------------------------------------------
@@ -356,6 +390,7 @@ function frame(now: number) {
   const cg = groundAt(camera.position.x, camera.position.z);
   sky.update(dt, camera, geo.lat, geo.lon, camera.position.y - Math.max(0, cg?.h ?? 0));
   if (sky.ageMs > 10 * 60 * 1000) { const g = world.toGeo(player.pos.x, player.pos.z); sky.refresh(g.lat, g.lon); }
+  updateShadows(camera.position.y - Math.max(0, cg?.h ?? 0), speedNow);
   renderer.render(scene, camera);
 
   hudAcc += dt;
@@ -396,3 +431,12 @@ function frame(now: number) {
 }
 requestAnimationFrame(frame);
 sky.refresh(START.lat, START.lon);
+
+// debug: ?shadowtest adds a white pad with a box floating over it, to check shadow rendering
+if (q.has('shadowtest')) {
+  const pad = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.MeshLambertMaterial({ color: '#ffffff' }));
+  pad.rotation.x = -Math.PI / 2; pad.receiveShadow = true; scene.add(pad);
+  const box = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), new THREE.MeshLambertMaterial({ color: '#cc3333' }));
+  box.castShadow = true; scene.add(box);
+  setInterval(() => { const p = player.pos; pad.position.set(p.x + 20, p.y + 0.5, p.z - 25); box.position.set(p.x + 20, p.y + 6, p.z - 25); }, 100);
+}

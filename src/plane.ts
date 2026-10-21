@@ -55,6 +55,7 @@ export class Plane {
 
   constructor(scene: THREE.Scene, public spec: PlaneSpec) {
     if (spec === JET) this.buildJet(); else this.buildAirliner();
+    this.group.traverse((o) => { if (o !== this.flame) o.castShadow = true; });
     scene.add(this.group);
   }
 
@@ -107,6 +108,7 @@ export class Plane {
   /** swap the built-in model for a loaded glTF (the jet keeps its afterburner glow) */
   useModel(model: THREE.Object3D) {
     for (const c of [...this.group.children]) if (c !== this.flame) this.group.remove(c);
+    model.traverse((o) => { o.castShadow = true; });
     this.group.add(model);
   }
 

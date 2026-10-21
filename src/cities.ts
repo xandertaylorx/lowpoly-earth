@@ -202,7 +202,7 @@ export class Cities {
       const style: Style = height > 60 ? (hash(seed + 4) < 0.7 ? 2 : 1) : height > 20 ? (hash(seed + 4) < 0.65 ? 1 : 0) : 0;
       let wall: THREE.Color;
       if (style === 2) wall = tint.set('#ffffff').multiplyScalar(0.85 + hash(seed + 1) * 0.3).clone();
-      else { wall = WALLS[Math.floor(hash(seed + 2) * WALLS.length)].clone(); if (b.colour) { try { wall = new THREE.Color(b.colour).lerp(new THREE.Color('#ffffff'), 0.25); } catch { /* keep palette colour */ } } }
+      else { wall = WALLS[Math.floor(hash(seed + 2) * WALLS.length)].clone(); if (b.colour) { if (/^#[0-9a-f]{6}$/i.test(b.colour)) wall = new THREE.Color(b.colour).lerp(new THREE.Color('#ffffff'), 0.25); } } // named OSM colours are unreliable; only hex is trusted
       const roof = ROOFS[Math.floor(hash(seed + 3) * ROOFS.length)];
       const bay = BAY[style], floor = FLOOR[style];
       const P = wp[style], C = wc[style], U = wu[style];
@@ -256,6 +256,7 @@ export class Cities {
       if (uv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
       geo.computeVertexNormals(); geo.computeBoundingSphere();
       const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = mesh.receiveShadow = true;
       mesh.position.set(c.x, 0, c.z);
       this.group.add(mesh);
       return mesh;

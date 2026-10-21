@@ -50,8 +50,9 @@ export class Sky {
   localTime = new Date();
   status = 'default weather';
   timeOffsetH = 0;
-  private sun = new THREE.DirectionalLight('#fff3dd', 2);
-  private hemi = new THREE.HemisphereLight('#dfeaff', '#6b5d4a', 1);
+  sun = new THREE.DirectionalLight('#fff3dd', 2);
+  cover = 0; // smoothed overcast amount 0..1 (used to soften shadows)
+  hemi = new THREE.HemisphereLight('#dfeaff', '#6b5d4a', 1);
   private dome: THREE.Mesh;
   private domeU: Record<string, { value: any }>;
   private clouds: THREE.Mesh;
@@ -73,6 +74,9 @@ export class Sky {
 
   constructor(private scene: THREE.Scene) {
     scene.add(this.sun, this.sun.target, this.hemi);
+    this.sun.castShadow = true;
+    Object.assign(this.sun.shadow, { bias: -0.0004, normalBias: 0.5, radius: 3 });
+    this.sun.shadow.mapSize.set(2048, 2048);
     scene.fog = new THREE.Fog('#a9c4e0', 5000, 60000);
 
     this.domeU = skyUniforms;
@@ -208,6 +212,7 @@ export class Sky {
       c.r = lerp(c.r, l, amt); c.g = lerp(c.g, l, amt); c.b = lerp(c.b, l, amt);
     };
     const over = Math.min(1, cover * 0.85 + Math.min(1, wet) * 0.2);
+    this.cover = over;
     gray(this.topC, over, 0.78 - 0.25 * Math.min(1, wet));
     gray(this.horC, over * 0.8, 0.9 - 0.2 * Math.min(1, wet));
 
@@ -216,10 +221,10 @@ export class Sky {
     this.flash = Math.max(0, this.flash - dt * 4);
 
     this.sun.color.setHSL(0.11, lerp(0.9, 0.15, smooth(0, 14, alt)), lerp(0.6, 0.97, smooth(0, 14, alt)));
-    this.sun.intensity = 2.8 * dayF * (1 - 0.7 * over);
+    this.sun.intensity = 3.4 * dayF * (1 - 0.7 * over);
     this.hemi.color.copy(this.topC).lerp(new THREE.Color('#ffffff'), 0.5);
     this.hemi.groundColor.set('#8a8d92');
-    this.hemi.intensity = (lerp(0.28, 1.5, dayF) * (1 - 0.05 * over)) + this.flash * 2;
+    this.hemi.intensity = (lerp(0.3, 1.75, dayF) * (1 - 0.05 * over)) + this.flash * 2;
     this.sun.position.copy(cam.position).addScaledVector(this.sunDir, 1000);
     this.sun.target.position.copy(cam.position);
 

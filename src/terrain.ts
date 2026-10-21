@@ -619,6 +619,7 @@ export class Terrain {
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
     t.mesh = new THREE.Mesh(geo, this.terrainMat);
+    t.mesh.receiveShadow = true;
     t.textured = false; t.mapMat = undefined;
     this.surface(t, null, this.terrainMat);
     const ie = this.images.get(this.imageKeyFor(t).key);
