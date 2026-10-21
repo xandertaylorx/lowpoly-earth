@@ -8,11 +8,11 @@ import type { MapData, SatSrc } from './mapdata';
 export const MIN_Z = 7;
 export const MAX_Z = 15;
 const N = 32;
-const MAX_INFLIGHT = 36;
+const MAX_INFLIGHT = 48;
 // Satellite imagery draped on the terrain: Sentinel-2 cloudless by EOX (native detail ~zoom 13).
 const IMG_URL = 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2021_3857/default/g/';
 const IMG_MAX_Z = 13;
-const IMG_INFLIGHT = 16;
+const IMG_INFLIGHT = 32;
 // Several hostnames for the same bucket => 6 HTTP/1.1 connections each, so tiles stream in parallel.
 const HOSTS = [
   'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/',
@@ -103,7 +103,7 @@ class Tile {
   mesh?: THREE.Mesh; water?: THREE.Mesh;
   builtVer = -1;
   lastShown = 0; wasSplit = false; textured = false; imgKey = ''; mapMat?: THREE.Material; uvZ = -1;
-  want = -1; score = 0; retryAt = 0;
+  want = -1; score = 0; retryAt = 0; readyAt = 0;
   lonW: number; lonE: number; latN: number; latS: number; cLat: number; cLon: number;
   constructor(public z: number, public x: number, public y: number) {
     this.key = `${z}/${x}/${y}`;
@@ -157,6 +157,7 @@ export class Terrain {
   private imgQueue: string[] = [];
   private imgInflight = 0;
   anisotropy = 4;
+  maxZ = MAX_Z;   // dynamic: lowered at high speed so detail we can't use isn't fetched
   mapProvider?: MapData;
   private p = { x: 0, y: 0, z: 0, fx: 0, fz: -1 };
 
@@ -208,14 +209,40 @@ export class Terrain {
 
   // ---- streaming -------------------------------------------------------------------------
 
-  /** Call ~10x/s. Decides which tiles to show / fetch for a viewer at world pos with heading (fx,fz). */
-  update(px: number, py: number, pz: number, fx: number, fz: number, viewDist: number) {
-    this.p = { x: px, y: py, z: pz, fx, fz };
+  /** Call ~10x/s. Decides which tiles to show / fetch for a viewer at world pos with heading (fx,fz).
+   *  `speed` (m/s) lowers the max detail and drives look-ahead prefetching along the heading. */
+  update(px: number, py: number, pz: number, fx: number, fz: number, viewDist: number, speed = 0) {
     this.viewDist = viewDist;
     this.stamp++;
     this.queue.length = 0;
+    this.imgQueue.length = 0;
+    this.maxZ = speed > 700 ? 12 : speed > 350 ? 13 : speed > 150 ? 14 : MAX_Z;
 
-    const { lat, lon } = world.toGeo(px, pz);
+    // 1) prefetch: walk the same quadtree from points ahead of us (requests only, nothing displayed)
+    if (speed > 40) {
+      const fl = Math.hypot(fx, fz) || 1;
+      for (const T of [1.5, 3.5, 7, 12]) {
+        const dd = Math.min(speed * T, 30000);
+        this.p = { x: px + (fx / fl) * dd, y: py, z: pz + (fz / fl) * dd, fx, fz };
+        this.traverse(true);
+      }
+    }
+    // 2) the real view
+    this.p = { x: px, y: py, z: pz, fx, fz };
+    const out = this.traverse(false);
+    this.apply(out);
+
+    this.queue.sort((a, b) => a.score - b.score);
+    this.pump();
+    this.imgQueue.sort((a, b) => this.images.get(a)!.score - this.images.get(b)!.score);
+    this.pumpImages();
+    this.stats = { ready: 0, inflight: this.inflight, queued: this.queue.length, shown: this.shown.size };
+    for (const t of this.tiles.values()) if (t.state === 'ready') this.stats.ready++;
+    if (this.tiles.size > 1100 && performance.now() - this.lastEvict > 4000) this.evict();
+  }
+
+  private traverse(pre: boolean): Tile[] {
+    const { lat, lon } = world.toGeo(this.p.x, this.p.z);
     const n = 2 ** MIN_Z;
     const u = (lon + 180) / 360;
     const v = (1 - Math.asinh(Math.tan((Math.max(-85, Math.min(85, lat)) * Math.PI) / 180)) / Math.PI) / 2;
@@ -224,15 +251,9 @@ export class Terrain {
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       const y = cy + dy;
       if (y < 0 || y >= n) continue;
-      this.visit(this.getTile(MIN_Z, (((cx + dx) % n) + n) % n, y), out);
+      this.visit(this.getTile(MIN_Z, (((cx + dx) % n) + n) % n, y), out, pre);
     }
-    this.apply(out);
-
-    this.queue.sort((a, b) => a.score - b.score);
-    this.pump();
-    this.stats = { ready: 0, inflight: this.inflight, queued: this.queue.length, shown: this.shown.size };
-    for (const t of this.tiles.values()) if (t.state === 'ready') this.stats.ready++;
-    if (this.tiles.size > 700 && performance.now() - this.lastEvict > 4000) this.evict();
+    return out;
   }
 
   private dist(t: Tile) {
@@ -245,33 +266,51 @@ export class Terrain {
     return { d: Math.hypot(dx, dy, dz), cx: c.x, cz: c.z };
   }
 
-  /** Returns true if tile's area is fully covered (or culled); appends the tiles to display to `out`. */
-  private visit(t: Tile, out: Tile[]): boolean {
+  /** Tile can be displayed once its heights are in and (shortly after) its satellite image too, so tiles don't pop in grey. */
+  private displayable(t: Tile) {
+    if (t.state !== 'ready') return false;
+    const e = this.images.get(this.imageKeyFor(t).key);
+    return e?.state === 'ready' || performance.now() - t.readyAt > 2500;
+  }
+
+  /** Returns true if tile's area is fully covered (or culled); appends the tiles to display to `out`.
+   *  With `pre` it only issues requests (look-ahead pass) and leaves split state alone. */
+  private visit(t: Tile, out: Tile[], pre: boolean): boolean {
     const { d, cx, cz } = this.dist(t);
     if (d > this.viewDist) return true;
-    const ready = t.state === 'ready';
-    if (!ready && t.state === 'idle') {
+    const ready = this.displayable(t);
+    if (t.state === 'idle' || !ready) {
       const dir = Math.hypot(cx - this.p.x, cz - this.p.z) || 1;
       const ahead = Math.max(0, ((cx - this.p.x) * this.p.fx + (cz - this.p.z) * this.p.fz) / dir);
-      t.want = this.stamp;
-      t.score = d / t.widthM - 0.4 * ahead;
-      this.queue.push(t);
+      const score = d / t.widthM - 0.4 * ahead + (pre ? 0.3 : 0);
+      if (t.state === 'idle') {
+        if (t.want !== this.stamp) { t.want = this.stamp; t.score = score; this.queue.push(t); } else t.score = Math.min(t.score, score);
+      }
+      this.wantImage(t, score);
     }
-    if (t.z < MAX_Z) {
+    if (t.z < this.maxZ) {
       const split = d < t.widthM * (t.wasSplit ? 1.4 : 1.1);
-      t.wasSplit = split;
+      if (!pre) t.wasSplit = split;
       if (split) {
         const tmpOut: Tile[] = [];
         let all = true;
         const x2 = t.x * 2, y2 = t.y * 2, z1 = t.z + 1;
         for (const [ox, oy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
-          if (!this.visit(this.getTile(z1, x2 + ox, y2 + oy), tmpOut)) all = false;
+          if (!this.visit(this.getTile(z1, x2 + ox, y2 + oy), tmpOut, pre)) all = false;
         }
         if (all) { for (const k of tmpOut) out.push(k); return true; }
       }
     }
     if (ready) { out.push(t); return true; }
     return false;
+  }
+
+  private wantImage(t: Tile, score: number) {
+    const key = this.imageKeyFor(t).key;
+    let e = this.images.get(key);
+    if (!e) { e = { state: 'idle', last: performance.now(), score, stamp: 0, retryAt: 0 }; this.images.set(key, e); }
+    if (e.state !== 'idle') return;
+    if (e.stamp !== this.stamp) { e.stamp = this.stamp; e.score = score; this.imgQueue.push(key); } else e.score = Math.min(e.score, score);
   }
 
   private apply(out: Tile[]) {
@@ -302,7 +341,6 @@ export class Terrain {
 
   private updateImagery(shown: Tile[]) {
     const now = performance.now();
-    this.imgQueue.length = 0;
     this.mapProvider?.begin();
     for (const t of shown) {
       if (!t.imgKey) t.imgKey = this.imageKeyFor(t).key;
@@ -311,15 +349,8 @@ export class Terrain {
       e.last = now;
       const mapped = this.tryMap(t);
       if (e.state === 'ready') { if (!t.textured && !mapped) this.applyTexture(t, e); continue; }
-      if (e.state === 'idle' && e.stamp !== this.stamp) {
-        e.stamp = this.stamp;
-        e.score = this.dist(t).d / t.widthM;
-        this.imgQueue.push(t.imgKey);
-      }
     }
     this.mapProvider?.end();
-    this.imgQueue.sort((a, b) => this.images.get(a)!.score - this.images.get(b)!.score);
-    this.pumpImages();
   }
 
   private pumpImages() {
@@ -443,7 +474,7 @@ export class Terrain {
         if (h < mn) mn = h; if (h > mx) mx = h;
       }
       t.heights = g; t.minH = mn; t.maxH = mx;
-      t.state = 'ready';
+      t.state = 'ready'; t.readyAt = performance.now();
       this.build(t);
     } catch {
       t.state = 'idle';

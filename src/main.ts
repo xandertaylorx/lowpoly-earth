@@ -3,7 +3,8 @@ import { world } from './world';
 import { Terrain } from './terrain';
 import { Sky, describe } from './weather';
 import { Minimap } from './minimap';
-import { Plane, type PlaneInput } from './plane';
+import { Plane, AIRLINER, JET, type PlaneInput } from './plane';
+import { Car } from './car';
 import { Cities } from './cities';
 import { MapData } from './mapdata';
 
@@ -23,14 +24,22 @@ const sky = new Sky(scene);
 const maps = new MapData();
 terrain.mapProvider = maps;
 const cities = new Cities(scene, terrain, maps);
-const plane = new Plane(scene);
+const airliner = new Plane(scene, AIRLINER);
+const jet = new Plane(scene, JET);
+const car = new Car(scene);
 const minimap = new Minimap($('minimap') as HTMLCanvasElement);
 const q = new URLSearchParams(location.search);
 if (q.has('hours')) sky.timeOffsetH = parseFloat(q.get('hours')!);
 
 // ---- state ------------------------------------------------------------------------------
-type Mode = 'walk' | 'fly';
+type Mode = 'walk' | 'fly' | 'drive';
 let mode: Mode = 'walk';
+type VehicleId = 'airliner' | 'jet' | 'car';
+const VEHICLES: Record<VehicleId, { v: Plane | Car; label: string }> = {
+  airliner: { v: airliner, label: 'Airliner' }, jet: { v: jet, label: 'Stealth jet' }, car: { v: car, label: 'Car' },
+};
+let selected: VehicleId = 'airliner';
+let veh: Plane | Car = airliner; // the vehicle you are in (when mode != walk)
 const player = { pos: new THREE.Vector3(0, 6000, 0), yaw: -0.6, pitch: 0, vy: 0, needsGround: true, swimming: false };
 let cockpit = false;
 const keys = new Set<string>();
@@ -38,7 +47,7 @@ const camPos = new THREE.Vector3();
 const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), windV = new THREE.Vector3();
 let crashTimer = 0;
 
-(window as any).__rw = { maps, cities, terrain, world, camera, player, plane, sky, keys, get mode() { return mode; }, teleport: (a: number, b: number) => teleport(a, b) };
+(window as any).__rw = { maps, cities, terrain, world, camera, player, airliner, jet, car, sky, keys, get veh() { return veh; }, get mode() { return mode; }, teleport: (a: number, b: number) => teleport(a, b) };
 
 const groundAt = (x: number, z: number) => terrain.heightAt(x, z);
 
@@ -50,7 +59,8 @@ addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'KeyF') toggleVehicle();
   if (e.code === 'KeyM') minimap.toggleZoom();
-  if (e.code === 'KeyC' && mode === 'fly') cockpit = !cockpit;
+  if (e.code === 'KeyC' && mode !== 'walk') cockpit = !cockpit;
+  if (mode === 'walk' && ['Digit1', 'Digit2', 'Digit3'].includes(e.code)) select((['airliner', 'jet', 'car'] as VehicleId[])[+e.code.slice(5) - 1]);
   if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -86,13 +96,15 @@ function teleport(lat: number, lon: number) {
   terrain.reposition();
   cities.reposition();
   if (mode === 'fly') {
-    plane.pos.set(0, Math.max(plane.pos.y, 1500), 0);
-    player.pos.copy(plane.pos);
+    veh.pos.set(0, Math.max(veh.pos.y, 1500), 0);
+    player.pos.copy(veh.pos);
+  } else if (mode === 'drive') {
+    veh.pos.set(0, 6000, 0); (veh as Car).grounded = false; player.pos.copy(veh.pos);
   } else {
     player.pos.set(0, 6000, 0); player.vy = 0; player.needsGround = true;
     $('load').classList.remove('hide');
   }
-  plane.placed = mode === 'fly';
+  for (const o of Object.values(VEHICLES)) if (o.v !== veh || mode === 'walk') o.v.placed = false;
   sky.refresh(lat, lon);
   notify(`Teleported to ${lat.toFixed(4)}, ${lon.toFixed(4)}`);
 }
@@ -122,27 +134,37 @@ $('tpgo').addEventListener('click', goTeleport);
 tpin.addEventListener('keydown', (e) => { if (e.key === 'Enter') goTeleport(); });
 minimap.onTeleport = (lat, lon) => teleport(lat, lon);
 
-// ---- plane boarding ---------------------------------------------------------------------------
+// ---- vehicle selection + boarding -------------------------------------------------------------
+function select(id: VehicleId) {
+  selected = id;
+  for (const k of Object.keys(VEHICLES)) $('veh-' + k).classList.toggle('on', k === id);
+  notify(`${VEHICLES[id].label} selected — press F to summon it`, 1800);
+}
+for (const id of Object.keys(VEHICLES) as VehicleId[]) $('veh-' + id).addEventListener('click', () => { if (mode === 'walk') select(id); });
+
+const HELP_FLY = 'TAKEOFF: hold ↑ to full throttle, at rotate speed\ntap S gently to lift off.\n↑/↓ throttle · S pull up · W push down\nA/D roll · Q/E rudder · Space brake\nC cockpit/chase · F leave (on ground)\nM map zoom';
 function toggleVehicle() {
   if (mode === 'walk') {
     if (player.needsGround) return;
-    const dx = plane.pos.x - player.pos.x, dz = plane.pos.z - player.pos.z;
-    if (!plane.placed || Math.hypot(dx, dz) > 120) {
-      const g = groundAt(player.pos.x - Math.sin(player.yaw) * 45, player.pos.z - Math.cos(player.yaw) * 45);
+    const v = VEHICLES[selected].v;
+    if (!v.placed || Math.hypot(v.pos.x - player.pos.x, v.pos.z - player.pos.z) > 120) {
       const fx = player.pos.x - Math.sin(player.yaw) * 45, fz = player.pos.z - Math.cos(player.yaw) * 45;
-      plane.park(fx, fz, Math.max(0, g?.h ?? player.pos.y - 1.7), player.yaw);
-      notify('Plane brought to you');
+      const g = groundAt(fx, fz);
+      v.park(fx, fz, Math.max(0, g?.h ?? player.pos.y), player.yaw);
+      notify(`${VEHICLES[selected].label} brought to you`);
     }
-    mode = 'fly'; cockpit = false;
-    camPos.copy(plane.pos);
-    notify('Boarded — ↑/↓ throttle, S pull up, W push down, A/D roll, Q/E rudder, C cockpit view, F leave', 5000);
+    veh = v; mode = v instanceof Car ? 'drive' : 'fly'; cockpit = false;
+    camPos.copy(v.pos);
+    notify(mode === 'drive' ? 'Driving — W/S throttle, A/D steer, Space handbrake, C view, F get out' : `Boarded the ${VEHICLES[selected].label.toLowerCase()} — ${HELP_FLY.split('\n')[2]}`, 4500);
   } else {
-    if (!plane.onGround || plane.speed > 12) { notify('Land and slow below 12 m/s to leave the plane'); return; }
-    const right = tmpV.set(1, 0, 0).applyQuaternion(plane.q); right.y = 0; right.normalize();
-    player.pos.set(plane.pos.x + right.x * -12, 0, plane.pos.z + right.z * -12);
+    const slow = veh instanceof Car ? Math.abs(veh.speed) < 8 : veh.onGround && veh.speed < 12;
+    if (!slow) { notify(veh instanceof Car ? 'Slow down to get out' : 'Land and slow below 12 m/s to leave'); return; }
+    const right = tmpV.set(1, 0, 0).applyQuaternion(veh.q); right.y = 0; right.normalize();
+    const side = veh instanceof Car ? -3 : -12;
+    player.pos.set(veh.pos.x + right.x * side, 0, veh.pos.z + right.z * side);
     const g = groundAt(player.pos.x, player.pos.z);
     player.pos.y = Math.max(0, g?.h ?? 0);
-    player.yaw = plane.headingRad() * -1; player.pitch = 0; player.vy = 0;
+    player.yaw = veh.headingRad() * -1; player.pitch = 0; player.vy = 0;
     mode = 'walk';
   }
 }
@@ -157,9 +179,12 @@ function walk(dt: number) {
     if (g && g.z >= 13) {
       player.needsGround = false; player.pos.y = Math.max(0, g.h); player.vy = 0;
       $('load').classList.add('hide');
-      if (!plane.placed) { // park the plane a short walk from the spawn point
-        const px = 35, pz = -30, pg = groundAt(px, pz);
-        plane.park(px, pz, Math.max(0, pg?.h ?? g.h), 0.9);
+      // park each vehicle a short walk from the spawn point (only ones not already placed)
+      const spots: [Plane | Car, number, number, number][] = [[airliner, 35, -30, 0.9], [jet, 60, 6, 0.5], [car, 12, -18, -0.4]];
+      for (const [v, px, pz, yaw] of spots) {
+        if (v.placed) continue;
+        const pg = groundAt(px, pz);
+        v.park(px, pz, Math.max(0, pg?.h ?? g.h), yaw);
       }
     }
     return;
@@ -186,6 +211,7 @@ function walk(dt: number) {
 }
 
 function fly(dt: number) {
+  const plane = veh as Plane;
   const k = (c: string) => (keys.has(c) ? 1 : 0);
   const inp: PlaneInput = {
     pitch: k('KeyS') - k('KeyW'),
@@ -202,6 +228,12 @@ function fly(dt: number) {
   player.pos.copy(plane.pos);
 }
 
+function drive(dt: number) {
+  const c = veh as Car, k = (code: string) => (keys.has(code) ? 1 : 0);
+  c.update(dt, { throttle: k('KeyW') + k('ArrowUp') - k('KeyS') - k('ArrowDown'), steer: k('KeyA') + k('ArrowLeft') - k('KeyD') - k('ArrowRight'), brake: keys.has('Space') }, (x, z) => groundAt(x, z)?.h ?? null);
+  player.pos.copy(c.pos);
+}
+
 function placeCamera(dt: number) {
   if (mode === 'walk') {
     camera.position.set(player.pos.x, player.pos.y + 1.7, player.pos.z);
@@ -210,17 +242,19 @@ function placeCamera(dt: number) {
     camPos.copy(camera.position);
     return;
   }
+  const cm = veh.cam;
   if (cockpit) {
-    camera.position.copy(tmpV.set(0, 2.2, -16).applyQuaternion(plane.q).add(plane.pos));
-    camera.quaternion.copy(plane.q);
+    camera.position.copy(tmpV.set(cm.cockpit[0], cm.cockpit[1], cm.cockpit[2]).applyQuaternion(veh.q).add(veh.pos));
+    camera.quaternion.copy(veh.q);
     camPos.copy(camera.position);
     return;
   }
-  const want = tmpV.set(0, 9, 40).applyQuaternion(plane.q).add(plane.pos);
-  camPos.lerp(want, 1 - Math.exp(-9 * dt));
+  const stiff = mode === 'drive' ? 7 : 9;
+  const want = tmpV.set(0, cm.up, cm.back).applyQuaternion(veh.q).add(veh.pos);
+  camPos.lerp(want, 1 - Math.exp(-stiff * dt));
   camera.position.copy(camPos);
-  camera.up.lerp(tmpV2.set(0, 1, 0).applyQuaternion(plane.q), 1 - Math.exp(-3 * dt)).normalize();
-  camera.lookAt(tmpV2.set(0, 2, -60).applyQuaternion(plane.q).add(plane.pos));
+  camera.up.lerp(tmpV2.set(0, 1, 0).applyQuaternion(veh.q), 1 - Math.exp(-3 * dt)).normalize();
+  camera.lookAt(tmpV2.set(0, cm.up * 0.25, -cm.back * 1.5).applyQuaternion(veh.q).add(veh.pos));
 }
 
 // ---- main loop -----------------------------------------------------------------------------------
@@ -231,13 +265,14 @@ const fmt = (v: number, d = 0) => v.toFixed(d);
 function frame(now: number) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
-  if (mode === 'walk') walk(dt); else fly(dt);
+  if (mode === 'walk') walk(dt); else if (mode === 'fly') fly(dt); else drive(dt);
+  const speedNow = mode === 'walk' ? (keys.has('ShiftLeft') ? 28 : 6) : Math.abs((veh as Plane | Car).speed);
 
   // rebase the world origin around the vehicle/player to keep float precision
-  const pivot = mode === 'fly' ? plane.pos : player.pos;
-  if (!player.needsGround && Math.hypot(pivot.x, pivot.z) > (mode === 'fly' ? 4000 : 2500)) {
+  const pivot = mode === 'walk' ? player.pos : veh.pos;
+  if (!player.needsGround && Math.hypot(pivot.x, pivot.z) > (mode === 'walk' ? 2500 : 4000 + Math.min(speedNow * 4, 14000))) {
     const remap = world.rebase(pivot.x, pivot.z);
-    for (const p of [player.pos, plane.pos, camPos]) { const r = remap(p.x, p.z); p.x = r.x; p.z = r.z; }
+    for (const p of [player.pos, airliner.pos, jet.pos, car.pos, camPos]) { const r = remap(p.x, p.z); p.x = r.x; p.z = r.z; }
     sky.rebase(remap);
     terrain.reposition(remap);
     cities.reposition();
@@ -248,10 +283,11 @@ function frame(now: number) {
   tAcc += dt;
   if (tAcc > 0.1) {
     tAcc = 0;
-    const f = tmpV.set(0, 0, -1).applyQuaternion(mode === 'fly' ? plane.q : camera.quaternion);
-    terrain.update(camera.position.x, camera.position.y, camera.position.z, f.x, f.z, Math.min(sky.fogFar * 1.05, 150000));
+    const f = tmpV.set(0, 0, -1).applyQuaternion(mode === 'walk' ? camera.quaternion : veh.q);
+    maps.enabled = speedNow < (maps.enabled ? 220 : 150);          // hysteresis; ground paint is off at high speed
+    terrain.update(camera.position.x, camera.position.y, camera.position.z, f.x, f.z, Math.min(sky.fogFar * 1.05, 150000), speedNow);
     const cg0 = groundAt(camera.position.x, camera.position.z);
-    cities.update(camera.position.x, camera.position.z, camera.position.y - Math.max(0, cg0?.h ?? 0));
+    cities.update(camera.position.x, camera.position.z, speedNow > 330 ? 99999 : camera.position.y - Math.max(0, cg0?.h ?? 0));
   }
   const cg = groundAt(camera.position.x, camera.position.z);
   sky.update(dt, camera, geo.lat, geo.lon, camera.position.y - Math.max(0, cg?.h ?? 0));
@@ -262,15 +298,20 @@ function frame(now: number) {
   if (hudAcc > 0.1) {
     hudAcc = 0;
     const pg = world.toGeo(player.pos.x, player.pos.z);
-    const fwd = tmpV.set(0, 0, -1).applyQuaternion(mode === 'fly' ? plane.q : camera.quaternion);
+    const fwd = tmpV.set(0, 0, -1).applyQuaternion(mode === 'walk' ? camera.quaternion : veh.q);
     const heading = ((Math.atan2(fwd.x, -fwd.z) * 180) / Math.PI + 360) % 360;
     minimap.draw(pg.lat, pg.lon, heading);
     const g = groundAt(player.pos.x, player.pos.z);
     const w = sky.w, lt = sky.localTime;
-    const vehicle = mode === 'fly'
-      ? `FLYING  ${fmt(plane.speed)} m/s (${fmt(plane.speed * 3.6)} km/h)  thr ${fmt(plane.throttle * 100)}%\n` +
-        `V/S ${fmt(plane.vs)} m/s  pitch ${fmt(plane.pitchDeg())}°  bank ${fmt(-plane.bankDeg())}°${plane.onGround ? '  [on ground]' : plane.speed < 65 ? '  STALL' : ''}`
-      : (player.needsGround ? 'Loading terrain…' : `ON FOOT${player.swimming ? ' (swimming)' : ''}   F: board plane`);
+    let vehicle: string;
+    if (mode === 'fly') {
+      const pl = veh as Plane;
+      vehicle = `${pl.spec.name.toUpperCase()}  ${fmt(pl.speed)} m/s (${fmt(pl.speed * 3.6)} km/h` + (pl.speed > 200 ? `, Mach ${fmt(pl.speed / 340, 2)}` : '') + `)  thr ${fmt(pl.throttle * 100)}%\n` +
+        `V/S ${fmt(pl.vs)} m/s  pitch ${fmt(pl.pitchDeg())}°  bank ${fmt(-pl.bankDeg())}°${pl.onGround ? '  [on ground]' : pl.speed < pl.spec.stall ? '  STALL' : ''}`;
+    } else if (mode === 'drive') {
+      const c = veh as Car;
+      vehicle = `CAR  ${fmt(Math.abs(c.speed) * 3.6)} km/h${c.speed < -0.5 ? ' (reverse)' : ''}\nW/S throttle · A/D steer · Space handbrake`;
+    } else vehicle = player.needsGround ? 'Loading terrain…' : `ON FOOT${player.swimming ? ' (swimming)' : ''}   F: summon ${VEHICLES[selected].label.toLowerCase()}`;
     hud.textContent =
       `${Math.abs(pg.lat).toFixed(4)}°${pg.lat >= 0 ? 'N' : 'S'}  ${Math.abs(pg.lon).toFixed(4)}°${pg.lon >= 0 ? 'E' : 'W'}\n` +
       `Alt ${fmt(player.pos.y)} m ASL` + (g ? `   AGL ${fmt(player.pos.y - Math.max(0, g.h))} m` : '') + `   HDG ${fmt(heading)}°\n` +
@@ -281,8 +322,9 @@ function frame(now: number) {
       `tiles ${terrain.stats.shown} shown · ${terrain.stats.ready} cached · ${terrain.stats.inflight} loading\n` +
       `${cities.stats.tiles} city tiles · ${cities.stats.buildings} buildings`;
     help.textContent = mode === 'walk'
-      ? 'WASD walk · Shift sprint · Space jump\nMouse look (click to capture, Esc frees)\nF board plane · M map zoom\nDouble-click map to teleport'
-      : 'TAKEOFF: hold ↑ to full throttle, at 70+ m/s\ntap S gently to lift off. Avoid diving into the ground.\n↑/↓ throttle · S pull up · W push down\nA/D roll · Q/E rudder · Space brake\nC cockpit/chase · F leave (on ground)\nM map zoom';
+      ? 'WASD walk · Shift sprint · Space jump\nMouse look (click to capture, Esc frees)\n1/2/3 pick vehicle · F summon & board\nM map zoom · double-click map to teleport'
+      : mode === 'drive' ? 'W/S throttle · A/D steer · Space handbrake\nC cockpit/chase · F get out (when slow)\nM map zoom'
+      : HELP_FLY.replace('at rotate speed', `at ${(veh as Plane).spec.rotate}+ m/s`);
   }
 }
 requestAnimationFrame(frame);

@@ -35,6 +35,7 @@ const LANDUSE: Record<string, [string, number]> = {
 
 export class MapData {
   url = '';
+  enabled = true; // switched off at high speed: ground paint can't be built fast enough and isn't legible
   private vt = new Map<string, VEntry>();
   private tex = new Map<string, { tex: THREE.CanvasTexture; mat: THREE.Material; last: number }>();
   private wanted: string[] = [];
@@ -99,6 +100,7 @@ export class MapData {
   // ---- ground textures for terrain tiles -----------------------------------------------------------
   /** Map texture (satellite + roads/parks/water on top) covering terrain tile t, or null if not ready/too far. */
   provide(t: TileLike, dist: number, sat: (zi: number, vx: number, vy: number) => SatSrc | undefined) {
+    if (!this.enabled) return null;
     const zi = Math.min(14, t.z);
     if (dist > (RADIUS[zi] ?? 0)) return null;
     const d = t.z - zi, vx = t.x >> d, vy = t.y >> d, key = `${zi}/${vx}/${vy}`;
