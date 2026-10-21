@@ -11,6 +11,7 @@ class World {
   scaleLat = 53.45; // latitude used for the cos(lat) longitude scale
   cosLat = Math.cos(53.45 * rad);
   scaleVer = 0; // bumped when the longitude scale changes (tile meshes must be rebuilt)
+  freezeScale = false; // true during pulse drive: don't rebuild every tile on each latitude step
 
   get mLon() { return M_PER_DEG * this.cosLat; }
 
@@ -29,8 +30,9 @@ class World {
   rebase(px: number, pz: number) {
     const old = { lat0: this.lat0, lon0: this.lon0, mLon: this.mLon };
     const g = this.toGeo(px, pz);
+    g.lat = Math.max(-84.5, Math.min(84.5, g.lat));
     this.lat0 = g.lat; this.lon0 = g.lon;
-    if (Math.abs(g.lat - this.scaleLat) > 0.25) {
+    if (!this.freezeScale && Math.abs(g.lat - this.scaleLat) > 0.25) {
       this.scaleLat = g.lat; this.cosLat = Math.cos(g.lat * rad); this.scaleVer++;
     }
     return (x: number, z: number) => {
@@ -56,4 +58,13 @@ export function sunPosition(t: number, lat: number, lon: number) {
   const alt = Math.asin(Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H));
   const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi)) + Math.PI;
   return { az, alt }; // radians
+}
+
+/** Great-circle distance (m) and initial bearing (rad, clockwise from north) from point 1 to point 2. */
+export function greatCircle(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const p1 = lat1 * rad, p2 = lat2 * rad, dl = (lon2 - lon1) * rad;
+  const a = Math.sin((p2 - p1) / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  const dist = 2 * R_EARTH * Math.asin(Math.min(1, Math.sqrt(a)));
+  const bearing = Math.atan2(Math.sin(dl) * Math.cos(p2), Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl));
+  return { dist, bearing };
 }

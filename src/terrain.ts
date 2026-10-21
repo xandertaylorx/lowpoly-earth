@@ -195,6 +195,7 @@ export class Terrain {
   private imgInflight = 0;
   anisotropy = 4;
   zCap = MAX_Z;   // quality tier cap
+  gateMs = 2500; buildBudget = 24;
   maxZ = MAX_Z;   // dynamic: lowered at high speed so detail we can't use isn't fetched
   mapProvider?: MapData;
   private p = { x: 0, y: 0, z: 0, fx: 0, fz: -1 };
@@ -254,13 +255,19 @@ export class Terrain {
     this.stamp++;
     this.queue.length = 0;
     this.imgQueue.length = 0;
-    this.maxZ = Math.min(this.zCap, speed > 700 ? 12 : speed > 350 ? 13 : speed > 150 ? 14 : MAX_Z);
+    this.maxZ = Math.min(this.zCap, speed > 100000 ? 7 : speed > 20000 ? 8 : speed > 3000 ? 10 : speed > 700 ? 12 : speed > 350 ? 13 : speed > 150 ? 14 : MAX_Z);
+    this.gateMs = speed > 3000 ? 350 : 2500; // when very fast, don't wait for imagery
+    this.buildBudget = 24;
 
     // 1) prefetch: walk the same quadtree from points ahead of us (requests only, nothing displayed)
     if (speed > 40) {
       const fl = Math.hypot(fx, fz) || 1;
+      const cap = speed > 20000 ? 700000 : 30000; // pulse drive: look hundreds of km ahead
+      let prevDd = -1;
       for (const T of [1.5, 3.5, 7, 12]) {
-        const dd = Math.min(speed * T, 30000);
+        const dd = Math.min(speed * T, cap);
+        if (Math.abs(dd - prevDd) < 1000) continue;
+        prevDd = dd;
         this.p = { x: px + (fx / fl) * dd, y: py, z: pz + (fz / fl) * dd, fx, fz };
         this.traverse(true);
       }
@@ -308,7 +315,7 @@ export class Terrain {
   private displayable(t: Tile) {
     if (t.state !== 'ready') return false;
     const e = this.images.get(this.imageKeyFor(t).key);
-    return e?.state === 'ready' || performance.now() - t.readyAt > 2500;
+    return e?.state === 'ready' || performance.now() - t.readyAt > this.gateMs;
   }
 
   /** Returns true if tile's area is fully covered (or culled); appends the tiles to display to `out`.
@@ -355,7 +362,7 @@ export class Terrain {
     const now = performance.now();
     const next = new Map<string, Tile>();
     for (const t of out) {
-      if (t.builtVer !== world.scaleVer) this.build(t);
+      if (t.builtVer !== world.scaleVer && this.buildBudget-- > 0) this.build(t); // rebuilds after a scale change are spread over passes
       t.lastShown = now;
       next.set(t.key, t);
       if (!this.shown.has(t.key)) {

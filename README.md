@@ -18,7 +18,8 @@ Built with [Three.js](https://threejs.org), Vite and TypeScript. No API keys, no
 - **Real weather** from [Open-Meteo](https://open-meteo.com), refreshed every 10 minutes: fog/visibility, cloud cover, rain, snow, thunderstorms and wind all drive the scene.
 - **Real time of day.** Sun position is computed from your real lat/lon and the real clock, with sunsets, twilight and stars.
 - **Water.** Flat sea-level water with depth tint, animated waves, sky reflection and sun glint.
-- **Walk, drive or fly.** First-person walking, a car, an airliner (~250 m/s cruise) or a black stealth jet (Mach 3+, afterburner and all). Pick with `1`/`2`/`3`, summon with `F`.
+- **Walk, drive or fly.** First-person walking, a car, an airliner (~250 m/s cruise), a black stealth jet (Mach 3+) or a **spaceship** with a pulse drive. Pick with `1`-`4`, summon with `F`.
+- **Pulse drive.** The spaceship cruises at 15,000 km/h, and `P` engages the pulse drive (~280 km/s): Sydney to London in about a minute. Press **Set nav** with a destination typed in and the ship steers itself along the great circle and drops out of pulse 150 km short.
 - **Streams ahead of you.** Terrain tiles and imagery are prefetched along your heading, detail drops with speed, and tiles wait for their satellite image before appearing, so the world is there before you arrive, even at Mach 3.
 - **Minimap** with a global heightmap, your dot and heading, scale bar and lat/lon readout. Double-click it to teleport.
 - **Teleport** by coordinates or by **place name** ("Grand Canyon", "Tokyo", "Mount Fuji").
@@ -42,7 +43,7 @@ Open http://localhost:5173. Click the canvas to capture the mouse (Esc releases 
 | `Shift` | sprint |
 | `Space` | jump |
 | Mouse | look |
-| `1` `2` `3` | pick vehicle: airliner, stealth jet, car |
+| `1` `2` `3` `4` | pick vehicle: airliner, stealth jet, car, spaceship |
 | `F` | summon the picked vehicle and get in |
 
 | Car | |
@@ -61,6 +62,16 @@ Open http://localhost:5173. Click the canvas to capture the mouse (Esc releases 
 | `Space` / `B` | brake |
 | `C` | cockpit / chase camera |
 | `F` | leave (on the ground, below 12 m/s) |
+
+| Spaceship | |
+|---|---|
+| `↑` / `↓` | throttle (up to ~15,000 km/h) |
+| `Space` / `X` | hover up / down (low speed) |
+| `W` `S` / `A` `D` / `Q` `E` | pitch / bank-and-turn / yaw |
+| `P` | pulse drive on / off (steers to the nav target if one is set) |
+| `F` | leave (when landed) |
+
+**Long hops:** type a place in the box and press **Set nav** (a yellow marker appears on the minimap), board the spaceship with `4` + `F`, lift off with `Space`, then press `P`.
 
 Anywhere: `M` zooms the minimap. Type coordinates (`27.99, 86.93`, `35.68N 139.69E`) or a place name in the teleport box.
 

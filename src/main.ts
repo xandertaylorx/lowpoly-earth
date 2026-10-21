@@ -1,9 +1,9 @@
 import * as THREE from 'three';
-import { world } from './world';
+import { world, greatCircle } from './world';
 import { Terrain } from './terrain';
 import { Sky, describe } from './weather';
 import { Minimap } from './minimap';
-import { Plane, AIRLINER, JET, type PlaneInput } from './plane';
+import { Plane, AIRLINER, JET, SHIP, type PlaneInput } from './plane';
 import { Car } from './car';
 import { Cities } from './cities';
 import { MapData } from './mapdata';
@@ -24,6 +24,33 @@ const camera = new THREE.PerspectiveCamera(70, 1, 0.5, 600000);
 const resize = () => { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); };
 addEventListener('resize', resize); resize();
 
+// pulse-drive speed streaks: a tube of lines parented to the camera, stretched and brightened with speed
+scene.add(camera);
+const STREAKS = 360;
+const streakGeo = new THREE.BufferGeometry();
+const streakBase = new Float32Array(STREAKS * 3); // x, y, z of each streak (camera space)
+for (let i = 0; i < STREAKS; i++) { const a = Math.random() * 6.283, r = 3 + Math.random() * 50; streakBase.set([Math.cos(a) * r, Math.sin(a) * r, -Math.random() * 400], i * 3); }
+streakGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(STREAKS * 6), 3));
+const streakMat = new THREE.LineBasicMaterial({ color: '#cfe6ff', transparent: true, opacity: 0, fog: false, depthWrite: false });
+const streaks = new THREE.LineSegments(streakGeo, streakMat);
+streaks.frustumCulled = false; streaks.renderOrder = 5; streaks.visible = false;
+camera.add(streaks);
+function updateStreaks(dt: number, speed: number) {
+  const f = Math.min(1, Math.max(0, (speed - 15000) / 90000)); // 0 below 15 km/s, 1 above ~105 km/s
+  streaks.visible = f > 0.01; streakMat.opacity = f * 0.85;
+  const fov = 70 + 38 * f;
+  if (Math.abs(camera.fov - fov) > 0.05) { camera.fov = fov; camera.updateProjectionMatrix(); }
+  if (!streaks.visible) return;
+  const a = streakGeo.getAttribute('position') as THREE.BufferAttribute, len = 6 + 120 * f, v = 160 + 700 * f;
+  for (let i = 0; i < STREAKS; i++) {
+    let z = streakBase[i * 3 + 2] + v * dt;
+    if (z > 5) { z = -400; const t = Math.random() * 6.283, r = 3 + Math.random() * 50; streakBase[i * 3] = Math.cos(t) * r; streakBase[i * 3 + 1] = Math.sin(t) * r; }
+    streakBase[i * 3 + 2] = z;
+    a.setXYZ(i * 2, streakBase[i * 3], streakBase[i * 3 + 1], z); a.setXYZ(i * 2 + 1, streakBase[i * 3], streakBase[i * 3 + 1], z - len);
+  }
+  a.needsUpdate = true;
+}
+
 const START = { lat: 53.45, lon: -2.27 }; // Manchester, UK
 world.setOrigin(START.lat, START.lon);
 const terrain = new Terrain(scene);
@@ -34,6 +61,7 @@ const cities = new Cities(scene, terrain, maps);
 const props = new Props(scene, terrain, maps);
 const airliner = new Plane(scene, AIRLINER);
 const jet = new Plane(scene, JET);
+const ship = new Plane(scene, SHIP);
 const car = new Car(scene);
 // soft studio-style reflections for glossy glTF paint/metal only (applied per model, NOT scene-wide: scene.environment
 // would also fill every terrain/building surface with ambient light and wash out the sun shadows)
@@ -57,9 +85,9 @@ if (q.has('hours')) sky.timeOffsetH = parseFloat(q.get('hours')!);
 // ---- state ------------------------------------------------------------------------------
 type Mode = 'walk' | 'fly' | 'drive';
 let mode: Mode = 'walk';
-type VehicleId = 'airliner' | 'jet' | 'car';
+type VehicleId = 'airliner' | 'jet' | 'car' | 'ship';
 const VEHICLES: Record<VehicleId, { v: Plane | Car; label: string }> = {
-  airliner: { v: airliner, label: 'Airliner' }, jet: { v: jet, label: 'Stealth jet' }, car: { v: car, label: 'Car' },
+  airliner: { v: airliner, label: 'Airliner' }, jet: { v: jet, label: 'Stealth jet' }, car: { v: car, label: 'Car' }, ship: { v: ship, label: 'Spaceship' },
 };
 let selected: VehicleId = 'airliner';
 let veh: Plane | Car = airliner; // the vehicle you are in (when mode != walk)
@@ -70,7 +98,7 @@ const camPos = new THREE.Vector3();
 const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), windV = new THREE.Vector3();
 let crashTimer = 0;
 
-(window as any).__rw = { renderer, scene, props, maps, cities, terrain, world, camera, player, airliner, jet, car, sky, keys, get veh() { return veh; }, get mode() { return mode; }, teleport: (a: number, b: number) => teleport(a, b) };
+(window as any).__rw = { renderer, scene, props, maps, cities, terrain, world, camera, player, airliner, jet, car, ship, sky, keys, get veh() { return veh; }, get mode() { return mode; }, teleport: (a: number, b: number) => teleport(a, b) };
 
 const groundAt = (x: number, z: number) => terrain.heightAt(x, z);
 
@@ -83,7 +111,8 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyF') toggleVehicle();
   if (e.code === 'KeyM') minimap.toggleZoom();
   if (e.code === 'KeyC' && mode !== 'walk') cockpit = !cockpit;
-  if (mode === 'walk' && ['Digit1', 'Digit2', 'Digit3'].includes(e.code)) select((['airliner', 'jet', 'car'] as VehicleId[])[+e.code.slice(5) - 1]);
+  if (mode === 'walk' && ['Digit1', 'Digit2', 'Digit3', 'Digit4'].includes(e.code)) select((['airliner', 'jet', 'car', 'ship'] as VehicleId[])[+e.code.slice(5) - 1]);
+  if (e.code === 'KeyP' && mode === 'fly' && (veh as Plane).spec.space) togglePulse();
   if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -132,6 +161,15 @@ function teleport(lat: number, lon: number) {
   sky.refresh(lat, lon);
   notify(`Teleported to ${lat.toFixed(4)}, ${lon.toFixed(4)}`);
 }
+// ---- navigation target (used by the spaceship's pulse-drive autopilot) -------------------------------
+let nav: { lat: number; lon: number; label: string } | null = null;
+let pulseWas = false;
+function togglePulse() {
+  const sp = veh as Plane;
+  sp.pulse = !sp.pulse;
+  world.freezeScale = sp.pulse;
+  notify(sp.pulse ? (nav ? `PULSE DRIVE engaged: auto-steering to ${nav.label}` : 'PULSE DRIVE engaged: steer with A/D, P to drop out') : 'Pulse drive disengaged', 3500);
+}
 const tpin = $('tpin') as HTMLInputElement;
 async function geocode(name: string) {
   const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(name)}`);
@@ -154,7 +192,19 @@ const goTeleport = async () => {
     teleport(g.lat, g.lon); notify(`Teleported to ${g.label}`); tpin.blur();
   } catch { notify('Place search failed (offline?) — try coordinates like 36.1, -112.1'); }
 };
+const goNav = async () => {
+  const text = tpin.value.trim();
+  if (!text) { nav = null; notify('Navigation target cleared'); return; }
+  const c = parseCoords(text);
+  try {
+    const g = c ? { ...c, label: `${c.lat.toFixed(2)}, ${c.lon.toFixed(2)}` } : await geocode(text);
+    if (!g) { notify(`Couldn't find "${text}"`); return; }
+    nav = { lat: g.lat, lon: g.lon, label: g.label.split(',')[0] };
+    notify(`Navigation target set: ${g.label}. In the spaceship press P for an auto-steered pulse jump.`, 4500); tpin.blur();
+  } catch { notify('Place search failed (offline?)'); }
+};
 $('tpgo').addEventListener('click', goTeleport);
+$('tpnav').addEventListener('click', goNav);
 tpin.addEventListener('keydown', (e) => { if (e.key === 'Enter') goTeleport(); });
 minimap.onTeleport = (lat, lon) => teleport(lat, lon);
 
@@ -204,7 +254,7 @@ function walk(dt: number) {
       player.needsGround = false; player.pos.y = Math.max(0, g.h); player.vy = 0;
       $('load').classList.add('hide');
       // park each vehicle a short walk from the spawn point (only ones not already placed)
-      const spots: [Plane | Car, number, number, number][] = [[airliner, 35, -30, 0.9], [jet, 60, 6, 0.5], [car, 12, -18, -0.4]];
+      const spots: [Plane | Car, number, number, number][] = [[airliner, 35, -30, 0.9], [jet, 60, 6, 0.5], [car, 12, -18, -0.4], [ship, 90, -20, 0.3]];
       for (const [v, px, pz, yaw] of spots) {
         if (v.placed) continue;
         const pg = groundAt(px, pz);
@@ -237,16 +287,36 @@ function walk(dt: number) {
 function fly(dt: number) {
   const plane = veh as Plane;
   const k = (c: string) => (keys.has(c) ? 1 : 0);
+  const space = !!plane.spec.space;
+  const g = groundAt(plane.pos.x, plane.pos.z);
+  // spaceship autopilot: while pulsing (or dropping out of it) steer along the great circle to the nav target
+  let autoHeading: number | null = null, navDist = 0;
+  if (space && nav) {
+    const geo = world.toGeo(plane.pos.x, plane.pos.z), gc = greatCircle(geo.lat, geo.lon, nav.lat, nav.lon);
+    navDist = gc.dist;
+    if (plane.pulse || plane.speed > plane.spec.cap * 1.5) autoHeading = gc.bearing;
+    if (plane.pulse && gc.dist < 150000) { togglePulse(); notify(`Arriving at ${nav.label}`, 3500); } // ~150 km of braking distance
+  }
+  if (space && plane.pulse) { // the flat-map world can't cope with the poles: stop the pulse short of them
+    const geo = world.toGeo(plane.pos.x, plane.pos.z);
+    if (Math.abs(geo.lat) > 82) { togglePulse(); notify('Pulse drive cut out: polar limit', 3000); }
+  }
   const inp: PlaneInput = {
     pitch: k('KeyS') - k('KeyW'),
     roll: k('KeyD') - k('KeyA'),
     yaw: k('KeyQ') + k('ArrowLeft') - k('KeyE') - k('ArrowRight'),
     throttleDelta: k('ArrowUp') - k('ArrowDown'),
-    brake: keys.has('Space') || keys.has('KeyB'),
+    brake: space ? keys.has('KeyB') : keys.has('Space') || keys.has('KeyB'),
+    lift: space ? k('Space') - k('KeyX') : 0,
+    autoHeading,
   };
-  const g = groundAt(plane.pos.x, plane.pos.z);
   sky.windAt(plane.pos.y, windV);
   plane.update(dt, inp, g ? g.h : null, windV);
+  if (space) {
+    if (pulseWas && !plane.pulse) { const geo = world.toGeo(plane.pos.x, plane.pos.z); sky.refresh(geo.lat, geo.lon); } // new weather at the destination
+    pulseWas = plane.pulse;
+  }
+  void navDist;
   if (plane.crashed && crashTimer <= 0) { crashTimer = 1.5; notify('Crashed! Recovering…', 2000); }
   if (crashTimer > 0) { crashTimer -= dt; if (crashTimer <= 0) plane.recover(g?.h ?? 0); }
   player.pos.copy(plane.pos);
@@ -273,7 +343,7 @@ function placeCamera(dt: number) {
     camPos.copy(camera.position);
     return;
   }
-  const stiff = mode === 'drive' ? 7 : 9;
+  const stiff = mode === 'drive' ? 7 : Math.max(9, Math.abs((veh as Plane).speed) / 50); // keep the chase camera glued on at pulse speed
   const want = tmpV.set(0, cm.up, cm.back).applyQuaternion(veh.q).add(veh.pos);
   camPos.lerp(want, 1 - Math.exp(-stiff * dt));
   camera.position.copy(camPos);
@@ -375,13 +445,14 @@ function frame(now: number) {
   const pivot = mode === 'walk' ? player.pos : veh.pos;
   if (!player.needsGround && Math.hypot(pivot.x, pivot.z) > (mode === 'walk' ? 2500 : 4000 + Math.min(speedNow * 4, 14000))) {
     const remap = world.rebase(pivot.x, pivot.z);
-    for (const p of [player.pos, airliner.pos, jet.pos, car.pos, camPos]) { const r = remap(p.x, p.z); p.x = r.x; p.z = r.z; }
+    for (const p of [player.pos, airliner.pos, jet.pos, car.pos, ship.pos, camPos]) { const r = remap(p.x, p.z); p.x = r.x; p.z = r.z; }
     sky.rebase(remap);
     terrain.reposition(remap);
     cities.reposition();
     props.reposition();
   }
   placeCamera(dt);
+  updateStreaks(dt, mode === 'fly' && (veh as Plane).spec.space ? (veh as Plane).speed : 0);
 
   const geo = world.toGeo(camera.position.x, camera.position.z);
   tAcc += dt;
@@ -406,15 +477,22 @@ function frame(now: number) {
     const pg = world.toGeo(player.pos.x, player.pos.z);
     const fwd = tmpV.set(0, 0, -1).applyQuaternion(mode === 'walk' ? camera.quaternion : veh.q);
     const heading = ((Math.atan2(fwd.x, -fwd.z) * 180) / Math.PI + 360) % 360;
-    minimap.draw(pg.lat, pg.lon, heading);
+    minimap.draw(pg.lat, pg.lon, heading, nav ?? undefined);
     updatePlace(pg.lat, pg.lon);
     const g = groundAt(player.pos.x, player.pos.z);
     const w = sky.w, lt = sky.localTime;
     let vehicle: string;
     if (mode === 'fly') {
       const pl = veh as Plane;
-      vehicle = `${pl.spec.name.toUpperCase()}  ${fmt(pl.speed)} m/s (${fmt(pl.speed * 3.6)} km/h` + (pl.speed > 200 ? `, Mach ${fmt(pl.speed / 340, 2)}` : '') + `)  thr ${fmt(pl.throttle * 100)}%\n` +
-        `V/S ${fmt(pl.vs)} m/s  pitch ${fmt(pl.pitchDeg())}°  bank ${fmt(-pl.bankDeg())}°${pl.onGround ? '  [on ground]' : pl.speed < pl.spec.stall ? '  STALL' : ''}`;
+      if (pl.spec.space) {
+        const kmh = pl.speed * 3.6;
+        vehicle = `${pl.pulse ? '⚡ PULSE DRIVE ' : 'SPACESHIP '} ${pl.speed > 20000 ? fmt(pl.speed / 1000) + ' km/s' : fmt(pl.speed) + ' m/s'} (${kmh >= 100000 ? fmt(kmh / 1000) + ',000' : fmt(kmh)} km/h)  thr ${fmt(pl.throttle * 100)}%\n` +
+          (pl.onGround ? '[landed]  ' : '') + `P pulse drive · Space/X hover up/down`;
+        if (nav) { const gc = greatCircle(pg.lat, pg.lon, nav.lat, nav.lon); vehicle += `\nNAV ${nav.label}: ${fmt(gc.dist / 1000).replace(/\B(?=(\d{3})+(?!\d))/g, ',')} km · bearing ${fmt(((gc.bearing * 180) / Math.PI + 360) % 360)}°${pl.pulse ? '  AUTO-STEER' : ''}`; }
+      } else {
+        vehicle = `${pl.spec.name.toUpperCase()}  ${fmt(pl.speed)} m/s (${fmt(pl.speed * 3.6)} km/h` + (pl.speed > 200 ? `, Mach ${fmt(pl.speed / 340, 2)}` : '') + `)  thr ${fmt(pl.throttle * 100)}%\n` +
+          `V/S ${fmt(pl.vs)} m/s  pitch ${fmt(pl.pitchDeg())}°  bank ${fmt(-pl.bankDeg())}°${pl.onGround ? '  [on ground]' : pl.speed < pl.spec.stall ? '  STALL' : ''}`;
+      }
     } else if (mode === 'drive') {
       const c = veh as Car;
       vehicle = `CAR  ${fmt(Math.abs(c.speed) * 3.6)} km/h${c.speed < -0.5 ? ' (reverse)' : ''}\nW/S throttle · A/D steer · Space handbrake`;
@@ -431,8 +509,9 @@ function frame(now: number) {
       `${cities.stats.tiles} city tiles · ${cities.stats.buildings} buildings · ${props.stats.trees} trees · ${props.stats.lamps} lamps\n` +
       `quality ${['low', 'medium', 'high'][tier]} · ${fmt(fpsEma)} fps`;
     help.textContent = mode === 'walk'
-      ? 'WASD walk · Shift sprint · Space jump\nMouse look (click to capture, Esc frees)\n1/2/3 pick vehicle · F summon & board\nM map zoom · double-click map to teleport'
+      ? 'WASD walk · Shift sprint · Space jump\nMouse look (click to capture, Esc frees)\n1/2/3/4 pick vehicle · F summon & board\nM map zoom · double-click map to teleport'
       : mode === 'drive' ? 'W/S throttle · A/D steer · Space handbrake\nC cockpit/chase · F get out (when slow)\nM map zoom'
+      : (veh as Plane).spec.space ? 'SPACESHIP: ↑/↓ throttle (to 15,000 km/h)\nSpace/X hover up/down · W/S pitch · A/D bank · Q/E yaw\nP = PULSE DRIVE (~280 km/s). Set a nav target first\n("Set nav" button) and it steers itself there.\nC cockpit/chase · F leave (landed) · M map zoom'
       : HELP_FLY.replace('at rotate speed', `at ${(veh as Plane).spec.rotate}+ m/s`);
   }
 }

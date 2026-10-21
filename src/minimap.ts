@@ -66,7 +66,7 @@ export class Minimap {
     return { lat: (Math.atan(Math.sinh(Math.PI * (1 - 2 * v))) * 180) / Math.PI, lon: u * 360 - 180 };
   }
 
-  draw(lat: number, lon: number, headingDeg: number) {
+  draw(lat: number, lon: number, headingDeg: number, dest?: { lat: number; lon: number }) {
     this.last = { lat, lon };
     const { ctx, canvas } = this, W = canvas.width, H = canvas.height;
     ctx.fillStyle = '#0a1420'; ctx.fillRect(0, 0, W, H);
@@ -88,6 +88,13 @@ export class Minimap {
     ctx.beginPath(); ctx.moveTo(0, -11); ctx.lineTo(6, 6); ctx.lineTo(0, 3); ctx.lineTo(-6, 6); ctx.closePath(); ctx.fill(); ctx.stroke();
     ctx.restore();
     ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(px, py, 2.2, 0, 7); ctx.fill();
+
+    if (dest) { // navigation target: yellow diamond, clamped to the edge of the map when off-screen
+      const t = Minimap.uv(dest.lat, dest.lon);
+      const tx = Math.max(8, Math.min(W - 8, ((t.u * S - sx) / vs) * W)), ty = Math.max(24, Math.min(H - 8, ((t.v * S - sy) / vs) * H));
+      ctx.save(); ctx.translate(tx, ty); ctx.rotate(Math.PI / 4); ctx.fillStyle = '#ffd400'; ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5;
+      ctx.fillRect(-5, -5, 10, 10); ctx.strokeRect(-5, -5, 10, 10); ctx.restore();
+    }
 
     // scale bar (metres per display pixel at this latitude)
     const mpp = (C_EARTH * Math.cos((lat * Math.PI) / 180)) / (W * zoom);
